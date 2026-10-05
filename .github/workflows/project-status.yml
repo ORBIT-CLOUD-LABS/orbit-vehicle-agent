@@ -1,0 +1,40 @@
+name: Project Status
+
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+      - closed
+
+  create:
+
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - ready_for_review
+      - converted_to_draft
+      - closed
+
+permissions:
+  contents: read
+
+jobs:
+  update-project-status:
+    if: >-
+      (github.event_name != 'create' ||
+       github.event.ref_type == 'branch') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+
+    uses: ORBIT-CLOUD-LABS/.github/.github/workflows/project-status-reusable.yml@main
+
+    with:
+      project_owner: ORBIT-CLOUD-LABS
+      project_number: 4
+      app_client_id: ${{ vars.ORBIT_PROJECT_APP_CLIENT_ID }}
+
+    secrets:
+      app_private_key: ${{ secrets.ORBIT_PROJECT_APP_PRIVATE_KEY }}
