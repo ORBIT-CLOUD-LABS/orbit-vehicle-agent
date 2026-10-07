@@ -27,7 +27,9 @@ Git 작업 규칙의 원본(source of truth)은 Organization 공통 `CONTRIBUTIN
 
 ## 규칙
 
-- 작업 흐름은 `Issue → Branch → Commit → Push → Pull Request → Review → Merge` 순서를 지킨다. 단계를 건너뛰지 않는다.
+- 작업 흐름은 `Issue → Publish Branch → Commit → Push → Pull Request → Review → Merge` 순서를 지킨다. 단계를 건너뛰지 않는다.
+- 브랜치 생성 시 `Source Branch`는 develop이 존재할 경우 develop을 source로 한다. Pull Request 또한 존재하는 develop 브랜치를 타겟으로 한다.
+- task/4-add-ai-agent-docs
 - Issue 는 이 레포(`orbit-vehicle-agent`) 범위의 작업만 다룬다. 다른 레포 변경이 필요하면 레포별 Issue·PR 로 나누자고 제안한다.
 - Issue 를 만들 때는 Issue Type(`Feature`, `Bug`, `Task`)과 `area:*` Label 을 하나 고른다. `work:*`, `needs:decision`, `cross-repo`, `risk:security` 는 필요할 때만 붙인다.
 - Secret, Credential, 개인정보를 커밋과 PR 에 넣지 않는다.
