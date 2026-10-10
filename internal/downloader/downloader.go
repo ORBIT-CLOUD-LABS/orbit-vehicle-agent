@@ -67,6 +67,14 @@ func New(dataDir string, httpClient *http.Client) *Downloader {
 	return &Downloader{httpClient: httpClient, dataDir: dataDir}
 }
 
+// Path returns the local path a completed download for campaignID is (or
+// will be) written to. Callers recovering from a restart use this to locate
+// a firmware image that Download already finished writing, without
+// re-downloading it.
+func (d *Downloader) Path(campaignID string) string {
+	return filepath.Join(d.dataDir, "downloads", campaignID+".bin")
+}
+
 // Download fetches downloadURL and writes it to
 // <dataDir>/downloads/<campaignID>.bin without buffering the whole file in
 // memory, then verifies the written size against fileSize and its SHA-256
@@ -97,12 +105,11 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 		return Result{}, &Error{Reason: FailureDownloadFailed, Err: fmt.Errorf("cdn returned http %d", resp.StatusCode)}
 	}
 
-	dir := filepath.Join(d.dataDir, "downloads")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	path := d.Path(campaignID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return Result{}, fmt.Errorf("create downloads dir: %w", err)
 	}
 
-	path := filepath.Join(dir, campaignID+".bin")
 	tmpPath := path + ".tmp"
 
 	written, actualSHA256, err := writeAndHash(tmpPath, resp.Body)
