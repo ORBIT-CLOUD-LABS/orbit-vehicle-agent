@@ -85,5 +85,6 @@ func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
 		Region:    cfg.Region,
 	}
 
-	return machine.New(ota, dl, inst, store, logger, identity, cfg.EnrollmentKey)
+	return machine.New(ota, dl, inst, store, logger, identity, cfg.EnrollmentKey,
+		machine.WithCheckInInterval(cfg.CheckInInterval))
 }

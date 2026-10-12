@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -41,7 +42,9 @@ func TestRun_EndToEnd(t *testing.T) {
 	}))
 	defer cdn.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// CHECKIN_INTERVAL(1초)이 상태 머신에 연결되지 않으면 기본 간격(30초)을
+	// 기다리다 이 제한에 걸린다.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var checkInCalls atomic.Int32
@@ -97,7 +100,7 @@ func TestRun_EndToEnd(t *testing.T) {
 	t.Setenv("REGION", "kr")
 	t.Setenv("ENROLLMENT_KEY", enrollKey)
 	t.Setenv("OTA_SERVER_URL", otaServer.URL)
-	t.Setenv("CHECKIN_INTERVAL", "30")
+	t.Setenv("CHECKIN_INTERVAL", "1")
 	t.Setenv("DATA_DIR", dataDir)
 	t.Setenv("INITIAL_VERSION", "1.0.0")
 
