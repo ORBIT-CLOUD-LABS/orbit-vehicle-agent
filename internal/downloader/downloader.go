@@ -71,6 +71,13 @@ func New(dataDir string, httpClient *http.Client) *Downloader {
 	return &Downloader{httpClient: httpClient, dataDir: dataDir}
 }
 
+// Path는 campaignID의 다운로드가 완료되면 저장되는(또는 저장될) 로컬 경로를
+// 반환한다. 재시작 후 복구하는 호출자가 Download가 이미 다 받아 둔 펌웨어를
+// 다시 받지 않고 찾을 때 쓴다.
+func (d *Downloader) Path(campaignID string) string {
+	return filepath.Join(d.dataDir, "downloads", campaignID+".bin")
+}
+
 // Download는 downloadURL을 받아 파일 전체를 메모리에 올리지 않고
 // <dataDir>/downloads/<campaignID>.bin에 쓴 뒤, 쓴 크기를 fileSize와,
 // SHA-256 다이제스트를 expectedSHA256(hex)과 비교해 검증한다.
@@ -109,12 +116,11 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 		return Result{}, &Error{Reason: FailureDownloadFailed, Err: fmt.Errorf("cdn returned http %d", resp.StatusCode)}
 	}
 
-	dir := filepath.Join(d.dataDir, "downloads")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	path := d.Path(campaignID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return Result{}, fmt.Errorf("create downloads dir: %w", err)
 	}
 
-	path := filepath.Join(dir, campaignID+".bin")
 	tmpPath := path + ".tmp"
 
 	written, actualSHA256, err := writeAndHash(tmpPath, resp.Body)
