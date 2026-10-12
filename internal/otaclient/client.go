@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -114,7 +115,7 @@ type CheckInResponse struct {
 // 500 response (Code is empty) as "retry on the next check-in cycle".
 func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, req CheckInRequest) (CheckInResponse, error) {
 	var resp CheckInResponse
-	path := fmt.Sprintf("/api/v1/vehicles/%s/check-in", vehicleID)
+	path := fmt.Sprintf("/api/v1/vehicles/%s/check-in", url.PathEscape(vehicleID))
 	if err := c.do(ctx, http.MethodPost, path, vehicleToken, req, &resp); err != nil {
 		return CheckInResponse{}, err
 	}
@@ -138,7 +139,7 @@ type Manifest struct {
 // failures.
 func (c *Client) GetManifest(ctx context.Context, vehicleID, campaignID, vehicleToken string) (Manifest, error) {
 	var resp Manifest
-	path := fmt.Sprintf("/api/v1/vehicles/%s/campaigns/%s/manifest", vehicleID, campaignID)
+	path := fmt.Sprintf("/api/v1/vehicles/%s/campaigns/%s/manifest", url.PathEscape(vehicleID), url.PathEscape(campaignID))
 	if err := c.do(ctx, http.MethodGet, path, vehicleToken, nil, &resp); err != nil {
 		return Manifest{}, err
 	}

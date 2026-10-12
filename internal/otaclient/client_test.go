@@ -28,7 +28,7 @@ func TestClient_Register_Success(t *testing.T) {
 		assert.Equal(t, "Bearer enroll-key", r.Header.Get("Authorization"))
 
 		var body otaclient.RegisterRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "car-0001", body.VehicleID)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -74,10 +74,11 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 		assert.Equal(t, "Bearer vehicle-token", r.Header.Get("Authorization"))
 
 		var body otaclient.CheckInRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "1.0.0", body.CurrentVersion)
-		require.NotNil(t, body.LastUpdate)
-		assert.Equal(t, "cmp-1", body.LastUpdate.CampaignID)
+		if assert.NotNil(t, body.LastUpdate) {
+			assert.Equal(t, "cmp-1", body.LastUpdate.CampaignID)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(otaclient.CheckInResponse{
@@ -108,7 +109,7 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body otaclient.CheckInRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Nil(t, body.LastUpdate)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -191,6 +192,23 @@ func TestClient_GetManifest_Success(t *testing.T) {
 	assert.Equal(t, int64(1024), manifest.FileSize)
 	assert.Equal(t, "abc123", manifest.SHA256)
 	assert.True(t, expiresAt.Equal(manifest.URLExpiresAt))
+}
+
+// MANIFEST-REQ-001
+func TestClient_GetManifest_EscapesPathParams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/cmp%2F1%3Fx=y/manifest", r.URL.EscapedPath())
+		assert.Empty(t, r.URL.RawQuery)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(otaclient.Manifest{CampaignID: "cmp/1?x=y"})
+	}))
+	defer server.Close()
+
+	client := otaclient.New(server.URL, server.Client())
+	_, err := client.GetManifest(context.Background(), "car-0001", "cmp/1?x=y", "vehicle-token")
+
+	require.NoError(t, err)
 }
 
 // MANIFEST-REQ-001

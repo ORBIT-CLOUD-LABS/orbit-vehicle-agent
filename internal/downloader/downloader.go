@@ -1,6 +1,5 @@
-// Package downloader streams firmware images from the CDN to local disk and
-// verifies their size and SHA-256 checksum before the file is made available
-// to the installer.
+// Package downloader는 CDN에서 펌웨어 이미지를 로컬 디스크로 스트리밍해 받고,
+// 설치기가 쓸 수 있게 하기 전에 크기와 SHA-256 체크섬을 검증한다.
 package downloader
 
 import (
@@ -13,18 +12,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
-// ErrManifestExpired is returned when the CDN rejects the signed download
-// URL (DOWNLOAD-REQ-001: HTTP 403 signature mismatch or 410 URL expired).
-// The caller must request a fresh manifest and retry the download; this is
-// not a download failure.
+// campaignIDPattern은 로컬 파일 이름에 쓰이는 campaignID가 downloads
+// 디렉터리 밖을 가리키지 못하게 막는다.
+var campaignIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// ErrManifestExpired는 CDN이 서명된 다운로드 URL을 거부했을 때 반환된다
+// (DOWNLOAD-REQ-001: HTTP 403 서명 불일치, 410 URL 만료).
+// 호출자는 매니페스트를 새로 받아 다운로드를 다시 시도해야 한다. 다운로드
+// 실패로 보지 않는다.
 var ErrManifestExpired = errors.New("cdn rejected download url: request a new manifest")
 
-// FailureReason classifies a download failure. Callers that report update
-// results (e.g. the agent's state machine) map this to their own failure
-// vocabulary; this package does not depend on that vocabulary directly.
+// FailureReason은 다운로드 실패의 종류다. 업데이트 결과를 보고하는 호출자
+// (예: 에이전트 상태 머신)가 자기 실패 사유로 변환해 쓴다. 이 패키지는 그
+// 사유 정의에 직접 의존하지 않는다.
 type FailureReason string
 
 const (
@@ -32,7 +36,7 @@ const (
 	FailureHashMismatch   FailureReason = "HASH_MISMATCH"
 )
 
-// Error wraps a download failure together with its FailureReason.
+// Error는 다운로드 실패를 FailureReason과 함께 감싼다.
 type Error struct {
 	Reason FailureReason
 	Err    error
@@ -46,20 +50,20 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// Result describes a successfully downloaded and verified firmware image.
+// Result는 다운로드와 검증을 마친 펌웨어 이미지 정보다.
 type Result struct {
 	Path string
 	Size int64
 }
 
-// Downloader streams firmware images from signed CDN URLs to DataDir/downloads.
+// Downloader는 서명된 CDN URL에서 펌웨어 이미지를 DataDir/downloads로 스트리밍해 받는다.
 type Downloader struct {
 	httpClient *http.Client
 	dataDir    string
 }
 
-// New creates a Downloader that stores downloaded images under dataDir.
-// If httpClient is nil, http.DefaultClient is used.
+// New는 받은 이미지를 dataDir 아래에 저장하는 Downloader를 만든다.
+// httpClient가 nil이면 http.DefaultClient를 쓴다.
 func New(dataDir string, httpClient *http.Client) *Downloader {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -67,24 +71,26 @@ func New(dataDir string, httpClient *http.Client) *Downloader {
 	return &Downloader{httpClient: httpClient, dataDir: dataDir}
 }
 
-// Path returns the local path a completed download for campaignID is (or
-// will be) written to. Callers recovering from a restart use this to locate
-// a firmware image that Download already finished writing, without
-// re-downloading it.
+// Path는 campaignID의 다운로드가 완료되면 저장되는(또는 저장될) 로컬 경로를
+// 반환한다. 재시작 후 복구하는 호출자가 Download가 이미 다 받아 둔 펌웨어를
+// 다시 받지 않고 찾을 때 쓴다.
 func (d *Downloader) Path(campaignID string) string {
 	return filepath.Join(d.dataDir, "downloads", campaignID+".bin")
 }
 
-// Download fetches downloadURL and writes it to
-// <dataDir>/downloads/<campaignID>.bin without buffering the whole file in
-// memory, then verifies the written size against fileSize and its SHA-256
-// digest against expectedSHA256 (hex-encoded).
+// Download는 downloadURL을 받아 파일 전체를 메모리에 올리지 않고
+// <dataDir>/downloads/<campaignID>.bin에 쓴 뒤, 쓴 크기를 fileSize와,
+// SHA-256 다이제스트를 expectedSHA256(hex)과 비교해 검증한다.
 //
-// It returns ErrManifestExpired for HTTP 403/410 responses (caller should
-// request a new manifest and retry). All other failures — connection
-// errors, HTTP 404/502/504, size mismatch, or hash mismatch — are returned
-// as *Error with a FailureReason the caller can branch on.
+// HTTP 403/410 응답이면 ErrManifestExpired를 반환한다(호출자는 매니페스트를
+// 새로 받아 다시 시도한다). 그 밖의 실패(연결 오류, HTTP 404/502/504, 크기
+// 불일치, 해시 불일치)는 호출자가 분기할 수 있도록 FailureReason을 담은
+// *Error로 반환한다.
 func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL string, fileSize int64, expectedSHA256 string) (Result, error) {
+	if !campaignIDPattern.MatchString(campaignID) {
+		return Result{}, fmt.Errorf("campaign id %q: must contain only letters, digits, or hyphens", campaignID)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("build download request: %w", err)
@@ -98,7 +104,12 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// continue below
+		// fileSize보다 1바이트만 더 읽는다. 크기 초과는 판정하되 초과분을
+		// 전부 디스크에 쓰지 않기 위해서다.
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.LimitReader(resp.Body, fileSize+1), resp.Body}
 	case http.StatusForbidden, http.StatusGone:
 		return Result{}, ErrManifestExpired
 	default:
@@ -136,8 +147,8 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 	return Result{Path: path, Size: written}, nil
 }
 
-// writeAndHash streams src to a new file at tmpPath while computing its
-// SHA-256 digest, keeping only one buffer's worth of data in memory.
+// writeAndHash는 src를 tmpPath에 새 파일로 스트리밍해 쓰면서 SHA-256
+// 다이제스트를 계산한다. 메모리에는 버퍼 하나 분량만 둔다.
 func writeAndHash(tmpPath string, src io.Reader) (written int64, sha256Hex string, err error) {
 	file, err := os.Create(tmpPath)
 	if err != nil {
