@@ -69,26 +69,44 @@ type Machine struct {
 	identity      VehicleIdentity
 	enrollmentKey string
 
+	checkInInterval time.Duration
+
 	vehicleToken string
 	snap         state.Snapshot
+}
+
+// Option configures a Machine.
+type Option func(*Machine)
+
+// WithCheckInInterval sets the interval used when the server gives no usable
+// nextCheckInSeconds or the check-in call fails (CHECKIN_INTERVAL).
+func WithCheckInInterval(d time.Duration) Option {
+	return func(m *Machine) {
+		m.checkInInterval = d
+	}
 }
 
 // New creates a Machine. identity and enrollmentKey are used for
 // (re-)registration; the vehicle token obtained from it is kept in memory
 // only, never persisted. If logger is nil, a no-op logger is used.
-func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string) *Machine {
+func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string, opts ...Option) *Machine {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Machine{
-		ota:           ota,
-		downloader:    dl,
-		installer:     inst,
-		store:         store,
-		logger:        logger,
-		identity:      identity,
-		enrollmentKey: enrollmentKey,
+	m := &Machine{
+		ota:             ota,
+		downloader:      dl,
+		installer:       inst,
+		store:           store,
+		logger:          logger,
+		identity:        identity,
+		enrollmentKey:   enrollmentKey,
+		checkInInterval: defaultCheckInInterval,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Run loads persisted state, registers the vehicle, resumes any update that
@@ -149,7 +167,7 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 	resp, err := m.checkIn(ctx)
 	if err != nil {
 		m.logger.Warn("check-in failed, retrying next cycle", zap.Error(err))
-		return defaultCheckInInterval
+		return m.checkInInterval
 	}
 
 	if m.snap.LastUpdate != nil {
@@ -162,6 +180,9 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 		m.performUpdate(ctx, resp.CampaignID)
 	}
 
+	if resp.NextCheckInSeconds <= 0 {
+		return m.checkInInterval
+	}
 	return time.Duration(resp.NextCheckInSeconds) * time.Second
 }
 

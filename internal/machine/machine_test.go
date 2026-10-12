@@ -23,6 +23,10 @@ var testIdentity = machine.VehicleIdentity{
 	Region:    "kr",
 }
 
+// fastCheckIn은 nextCheckInSeconds가 0인 응답으로 체크인을 연달아 일으키는
+// 테스트가 기본 간격을 기다리지 않게 한다.
+var fastCheckIn = machine.WithCheckInInterval(time.Millisecond)
+
 // runMachine runs m.Run in a goroutine and waits for it to return, failing
 // the test if it doesn't within a generous bound. Tests drive Run to
 // completion either by cancelling ctx (from an onCheckIn/onGetManifest
@@ -60,7 +64,7 @@ func TestMachine_Run_RegistersThenLoopsCheckInsWithToken(t *testing.T) {
 		}
 	}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -96,7 +100,7 @@ func TestMachine_Run_ClearsLastUpdateAfterSuccessfulCheckIn(t *testing.T) {
 			FinishedAt: time.Now().Add(-time.Minute),
 		},
 	}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -130,7 +134,7 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -168,7 +172,7 @@ func TestMachine_Run_DownloadFailure_RecordsDownloadFailed(t *testing.T) {
 	dl := &fakeDownloader{errs: []error{&downloader.Error{Reason: downloader.FailureDownloadFailed, Err: errBoom}}}
 	inst := &fakeInstaller{}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -197,7 +201,7 @@ func TestMachine_Run_HashMismatch_RecordsHashMismatch(t *testing.T) {
 
 	dl := &fakeDownloader{errs: []error{&downloader.Error{Reason: downloader.FailureHashMismatch, Err: errBoom}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -223,7 +227,7 @@ func TestMachine_Run_InstallFailure_RecordsInstallFailed(t *testing.T) {
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
 	inst := &fakeInstaller{errs: []error{&installer.Error{Reason: installer.FailureInstallFailed, Err: errBoom}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -261,7 +265,7 @@ func TestMachine_Run_ManifestNotTarget_GoesIdleWithoutFailureResult(t *testing.T
 			dl := &fakeDownloader{}
 			inst := &fakeInstaller{}
 			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-			m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+			m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 			err := runMachine(t, m, ctx, "1.0.0")
 			require.ErrorIs(t, err, context.Canceled)
@@ -290,7 +294,7 @@ func TestMachine_Run_ManifestTransientError_LeavesStateUnchangedForNextCycle(t *
 	ota.onCheckIn = func(int) { cancel() }
 
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -319,7 +323,7 @@ func TestMachine_Run_CDNRejectsURL_RefetchesManifestAndRetriesDownload(t *testin
 	}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -355,7 +359,7 @@ func TestMachine_Run_RestartRecovery_Downloading_RefetchesManifestAndRestartsDow
 		CurrentVersion: "1.0.0",
 		PendingUpdate:  &state.PendingUpdate{CampaignID: "cmp-1", TargetVersion: "1.1.0"},
 	}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -391,7 +395,7 @@ func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(
 		CurrentVersion: "1.0.0",
 		PendingUpdate:  &state.PendingUpdate{CampaignID: "cmp-1", TargetVersion: "1.1.0"},
 	}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -423,7 +427,7 @@ func TestMachine_Run_CheckInUnauthorized_ReregistersAndRetries(t *testing.T) {
 	}
 
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -454,7 +458,7 @@ func TestMachine_Run_GetManifestUnauthorized_ReregistersAndRetries(t *testing.T)
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -501,4 +505,58 @@ func TestMachine_Run_CheckInFailure_WaitsDefaultIntervalBeforeRetry(t *testing.T
 
 	assert.Len(t, ota.checkInCalls, 1, "기본 재시도 간격이 짧은 테스트 타임아웃보다 길어 다시 호출되지 않아야 한다")
 	assert.Empty(t, store.saves, "체크인 실패는 실패 사유를 저장하지 않는다")
+}
+
+// VEHICLE-REQ-001: 서버가 nextCheckInSeconds를 0 이하로 주면 쉬지 않고
+// 체크인하지 않도록 기본 간격을 기다린다.
+func TestMachine_Run_NonPositiveNextCheckIn_WaitsDefaultInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		seconds int
+	}{
+		{name: "0", seconds: 0},
+		{name: "음수", seconds: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ota := &fakeOTA{
+				registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
+				checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: false, NextCheckInSeconds: tt.seconds}},
+			}
+			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
+			m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+			defer cancel()
+
+			err := runMachine(t, m, ctx, "1.0.0")
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+
+			assert.Len(t, ota.checkInCalls, 1, "기본 간격이 짧은 테스트 타임아웃보다 길어 다시 호출되지 않아야 한다")
+		})
+	}
+}
+
+// VEHICLE-REQ-001: WithCheckInInterval로 준 간격을 기본 간격 대신 쓴다.
+func TestMachine_Run_WithCheckInInterval_OverridesDefaultInterval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ota := &fakeOTA{
+		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: false, NextCheckInSeconds: 0}},
+	}
+	ota.onCheckIn = func(call int) {
+		if call == 1 {
+			cancel()
+		}
+	}
+	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key",
+		machine.WithCheckInInterval(time.Millisecond))
+
+	err := runMachine(t, m, ctx, "1.0.0")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Len(t, ota.checkInCalls, 2)
 }
