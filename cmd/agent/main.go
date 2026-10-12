@@ -1,7 +1,6 @@
-// Command agent is the vehicle agent's entry point. It loads configuration,
-// assembles the state store, OTA client, downloader, installer, and state
-// machine, and runs the register/check-in/update loop until the process
-// receives a termination signal.
+// Command agent는 차량 에이전트의 진입점이다. 설정을 읽고 상태 저장소, OTA
+// 클라이언트, 다운로더, 설치기, 상태 머신을 조립한 뒤, 종료 신호를 받을 때까지
+// 등록·체크인·업데이트 루프를 실행한다.
 package main
 
 import (
@@ -37,12 +36,11 @@ func main() {
 	}
 }
 
-// run loads configuration, assembles the agent, and drives its state
-// machine until ctx is cancelled — either by the caller or by SIGINT/SIGTERM,
-// which this propagates to every in-flight HTTP request and to the
-// check-in loop. A clean shutdown (ctx cancelled) returns nil; any other
-// error means the agent could not start at all (flow.md ③: an invalid
-// enrollment key ends startup).
+// run은 설정을 읽고 에이전트를 조립한 뒤, ctx가 취소될 때까지 상태 머신을
+// 구동한다. ctx는 호출자나 SIGINT/SIGTERM으로 취소되며, 이 취소는 진행 중인
+// 모든 HTTP 요청과 체크인 루프에 전달된다. 정상 종료(ctx 취소)면 nil을
+// 반환하고, 그 밖의 에러는 에이전트가 시작하지 못했다는 뜻이다 (flow.md ③:
+// 등록 키가 틀리면 시작 실패로 끝난다).
 func run(ctx context.Context, logger *zap.Logger) error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -70,9 +68,8 @@ func run(ctx context.Context, logger *zap.Logger) error {
 	return nil
 }
 
-// assemble wires the agent's components together: persisted vehicle state,
-// the OTA server client, the firmware downloader and installer, and the
-// state machine that drives them.
+// assemble은 에이전트의 구성요소를 연결한다. 저장된 차량 상태, OTA 서버
+// 클라이언트, 펌웨어 다운로더와 설치기, 그리고 이들을 구동하는 상태 머신이다.
 func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
 	store := state.NewStore(cfg.DataDir, cfg.VehicleID)
 	ota := otaclient.New(cfg.OTAServerURL, newOTAHTTPClient())

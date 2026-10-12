@@ -20,14 +20,11 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 )
 
-// TestRun_EndToEnd drives the real cmd/agent entry point — config loading,
-// component assembly (state store, OTA client, downloader, installer,
-// state machine) and the register/check-in/update loop — against httptest
-// doubles for the OTA server and the firmware CDN. It covers the full
-// docs/flow.md path: registration (③), a check-in that targets an update
-// (④), fetching the manifest (⑤), downloading and verifying the firmware
-// (⑥), installing it (⑦), and reporting the result on the next check-in
-// (④), after which the server acknowledges it and the loop stops.
+// TestRun_EndToEnd는 OTA 서버와 펌웨어 CDN을 httptest 대역으로 두고 실제
+// cmd/agent 진입점(설정 로드, 구성요소 조립, 등록·체크인·업데이트 루프)을
+// 구동한다. docs/flow.md의 전체 경로를 다룬다: 등록(③), 업데이트 대상을
+// 알려 주는 체크인(④), 매니페스트 조회(⑤), 펌웨어 다운로드·검증(⑥),
+// 설치(⑦), 다음 체크인의 결과 보고(④). 서버가 결과를 확인하면 루프를 멈춘다.
 func TestRun_EndToEnd(t *testing.T) {
 	const (
 		vehicleID  = "car-0001"
