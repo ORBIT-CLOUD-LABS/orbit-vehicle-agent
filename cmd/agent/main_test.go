@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
@@ -112,6 +113,18 @@ func TestRun_EndToEnd(t *testing.T) {
 	installed, err := os.ReadFile(filepath.Join(dataDir, "firmware", "current.bin"))
 	require.NoError(t, err)
 	require.Equal(t, firmware, string(installed))
+}
+
+// 서버나 CDN이 응답하지 않아도 체크인 루프가 멈추지 않도록 HTTP 요청에
+// 시간 제한을 둔다.
+func TestHTTPClients_HaveTimeouts(t *testing.T) {
+	assert.Equal(t, otaRequestTimeout, newOTAHTTPClient().Timeout)
+
+	cdn := newCDNHTTPClient()
+	assert.Zero(t, cdn.Timeout, "펌웨어 본문 다운로드에는 전체 시간 제한을 두지 않는다")
+	transport, ok := cdn.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, cdnResponseHeaderTimeout, transport.ResponseHeaderTimeout)
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, v any) {

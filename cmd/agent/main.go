@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -74,8 +75,8 @@ func run(ctx context.Context, logger *zap.Logger) error {
 // state machine that drives them.
 func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
 	store := state.NewStore(cfg.DataDir, cfg.VehicleID)
-	ota := otaclient.New(cfg.OTAServerURL, http.DefaultClient)
-	dl := downloader.New(cfg.DataDir, http.DefaultClient)
+	ota := otaclient.New(cfg.OTAServerURL, newOTAHTTPClient())
+	dl := downloader.New(cfg.DataDir, newCDNHTTPClient())
 	inst := installer.New(cfg.DataDir)
 
 	identity := machine.VehicleIdentity{
@@ -87,4 +88,26 @@ func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
 
 	return machine.New(ota, dl, inst, store, logger, identity, cfg.EnrollmentKey,
 		machine.WithCheckInInterval(cfg.CheckInInterval))
+}
+
+const (
+	// otaRequestTimeout은 OTA 서버 API 요청 하나에 허용하는 전체 시간이다.
+	otaRequestTimeout = 30 * time.Second
+	// cdnResponseHeaderTimeout은 CDN이 응답 헤더를 보내기까지 기다리는 시간이다.
+	cdnResponseHeaderTimeout = 30 * time.Second
+)
+
+// newOTAHTTPClient는 OTA 서버 API용 HTTP 클라이언트를 만든다. 서버가 응답하지
+// 않아도 체크인 루프가 멈추지 않도록 요청마다 전체 시간 제한을 둔다.
+func newOTAHTTPClient() *http.Client {
+	return &http.Client{Timeout: otaRequestTimeout}
+}
+
+// newCDNHTTPClient는 펌웨어 다운로드용 HTTP 클라이언트를 만든다. 본문은 크기에
+// 따라 오래 걸릴 수 있어 전체 시간 제한은 두지 않고, 연결·TLS(기본 Transport)와
+// 응답 헤더 대기 시간만 제한한다.
+func newCDNHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = cdnResponseHeaderTimeout
+	return &http.Client{Transport: transport}
 }
