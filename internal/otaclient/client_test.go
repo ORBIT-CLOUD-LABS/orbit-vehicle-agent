@@ -194,6 +194,23 @@ func TestClient_GetManifest_Success(t *testing.T) {
 }
 
 // MANIFEST-REQ-001
+func TestClient_GetManifest_EscapesPathParams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/cmp%2F1%3Fx=y/manifest", r.URL.EscapedPath())
+		assert.Empty(t, r.URL.RawQuery)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(otaclient.Manifest{CampaignID: "cmp/1?x=y"})
+	}))
+	defer server.Close()
+
+	client := otaclient.New(server.URL, server.Client())
+	_, err := client.GetManifest(context.Background(), "car-0001", "cmp/1?x=y", "vehicle-token")
+
+	require.NoError(t, err)
+}
+
+// MANIFEST-REQ-001
 func TestClient_GetManifest_Errors(t *testing.T) {
 	tests := []struct {
 		name       string
