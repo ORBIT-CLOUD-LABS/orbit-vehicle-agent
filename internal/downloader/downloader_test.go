@@ -162,6 +162,38 @@ func TestDownloader_Download_ConnectionError(t *testing.T) {
 	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
 }
 
+// DOWNLOAD-REQ-001
+func TestDownloader_Download_RejectsUnsafeCampaignID(t *testing.T) {
+	tests := []struct {
+		name       string
+		campaignID string
+	}{
+		{name: "상위 디렉터리 이동", campaignID: "../../escaped"},
+		{name: "경로 구분자 포함", campaignID: "a/b"},
+		{name: "빈 값", campaignID: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := []byte("firmware-image-bytes")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(content)
+			}))
+			defer server.Close()
+
+			root := t.TempDir()
+			dataDir := filepath.Join(root, "data")
+			d := downloader.New(dataDir, server.Client())
+
+			_, err := d.Download(context.Background(), tt.campaignID, server.URL, int64(len(content)), sha256Hex(content))
+
+			require.Error(t, err)
+			assert.NoFileExists(t, filepath.Join(root, "escaped.bin"))
+			assertNoFilesLeft(t, dataDir, tt.campaignID)
+		})
+	}
+}
+
 func assertNoFilesLeft(t *testing.T, dataDir, campaignID string) {
 	t.Helper()
 

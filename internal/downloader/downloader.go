@@ -13,8 +13,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// campaignIDPattern keeps campaignID, which becomes part of a local file
+// name, from escaping the downloads directory.
+var campaignIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // ErrManifestExpired is returned when the CDN rejects the signed download
 // URL (DOWNLOAD-REQ-001: HTTP 403 signature mismatch or 410 URL expired).
@@ -77,6 +82,10 @@ func New(dataDir string, httpClient *http.Client) *Downloader {
 // errors, HTTP 404/502/504, size mismatch, or hash mismatch — are returned
 // as *Error with a FailureReason the caller can branch on.
 func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL string, fileSize int64, expectedSHA256 string) (Result, error) {
+	if !campaignIDPattern.MatchString(campaignID) {
+		return Result{}, fmt.Errorf("campaign id %q: must contain only letters, digits, or hyphens", campaignID)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("build download request: %w", err)
