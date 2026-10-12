@@ -53,26 +53,27 @@ func TestRun_EndToEnd(t *testing.T) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /api/v1/vehicles/register", func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer "+enrollKey, r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer "+enrollKey, r.Header.Get("Authorization"))
 		writeJSON(t, w, otaclient.RegisterResponse{VehicleToken: "tok-1"})
 	})
 
 	mux.HandleFunc("POST /api/v1/vehicles/"+vehicleID+"/check-in", func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
 
 		var req otaclient.CheckInRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 
 		switch checkInCalls.Add(1) {
 		case 1:
-			require.Equal(t, "1.0.0", req.CurrentVersion)
-			require.Nil(t, req.LastUpdate, "최초 체크인에는 보고할 이전 결과가 없어야 한다")
+			assert.Equal(t, "1.0.0", req.CurrentVersion)
+			assert.Nil(t, req.LastUpdate, "최초 체크인에는 보고할 이전 결과가 없어야 한다")
 			writeJSON(t, w, otaclient.CheckInResponse{UpdateTarget: true, CampaignID: campaignID, NextCheckInSeconds: 0})
 		case 2:
-			require.Equal(t, "1.1.0", req.CurrentVersion, "설치 후 체크인은 새 버전을 보고해야 한다")
-			require.NotNil(t, req.LastUpdate, "설치 결과는 다음 체크인에 보고되어야 한다")
-			require.Equal(t, campaignID, req.LastUpdate.CampaignID)
-			require.Equal(t, "SUCCEEDED", req.LastUpdate.Result)
+			assert.Equal(t, "1.1.0", req.CurrentVersion, "설치 후 체크인은 새 버전을 보고해야 한다")
+			if assert.NotNil(t, req.LastUpdate, "설치 결과는 다음 체크인에 보고되어야 한다") {
+				assert.Equal(t, campaignID, req.LastUpdate.CampaignID)
+				assert.Equal(t, "SUCCEEDED", req.LastUpdate.Result)
+			}
 			writeJSON(t, w, otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
 			cancel()
 		default:
@@ -81,7 +82,7 @@ func TestRun_EndToEnd(t *testing.T) {
 	})
 
 	mux.HandleFunc("GET /api/v1/vehicles/"+vehicleID+"/campaigns/"+campaignID+"/manifest", func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
 		writeJSON(t, w, otaclient.Manifest{
 			CampaignID:    campaignID,
 			TargetVersion: "1.1.0",
@@ -130,5 +131,5 @@ func TestHTTPClients_HaveTimeouts(t *testing.T) {
 func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(v))
+	assert.NoError(t, json.NewEncoder(w).Encode(v))
 }
