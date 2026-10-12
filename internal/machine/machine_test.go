@@ -27,11 +27,10 @@ var testIdentity = machine.VehicleIdentity{
 // 테스트가 기본 간격을 기다리지 않게 한다.
 var fastCheckIn = machine.WithCheckInInterval(time.Millisecond)
 
-// runMachine runs m.Run in a goroutine and waits for it to return, failing
-// the test if it doesn't within a generous bound. Tests drive Run to
-// completion either by cancelling ctx (from an onCheckIn/onGetManifest
-// callback, once the scenario under test has happened) or with a short
-// context timeout.
+// runMachine은 m.Run을 goroutine에서 실행하고 반환될 때까지 기다린다. 넉넉한
+// 시간 안에 끝나지 않으면 테스트를 실패시킨다. 테스트는 검증할 상황이 일어난
+// 뒤 onCheckIn/onGetManifest 콜백에서 ctx를 취소하거나, 짧은 context
+// 타임아웃으로 Run을 끝낸다.
 func runMachine(t *testing.T, m *machine.Machine, ctx context.Context, initialVersion string) error {
 	t.Helper()
 	done := make(chan error, 1)

@@ -10,10 +10,10 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
 )
 
-// fakeOTA is a hand-written test double for machine.OTAClient. Each method's
-// scripted results are consumed in order; the last one repeats once
-// exhausted. onCheckIn/onGetManifest let a test react to a call (e.g. to
-// cancel the driving context once the scenario under test has happened).
+// fakeOTA는 machine.OTAClient의 손으로 만든 테스트 대역이다. 메서드마다 미리
+// 정한 결과를 순서대로 쓰고, 다 쓰면 마지막 결과를 반복한다.
+// onCheckIn/onGetManifest로 호출에 반응할 수 있다(예: 검증할 상황이 일어난 뒤
+// 구동 중인 context를 취소).
 type fakeOTA struct {
 	registerResponses []otaclient.RegisterResponse
 	registerErrs      []error
@@ -58,8 +58,8 @@ func (f *fakeOTA) GetManifest(_ context.Context, _, campaignID, vehicleToken str
 	return pick(f.manifestResponses, i), pick(f.manifestErrs, i)
 }
 
-// pick returns items[i], or the last item if i is beyond the slice, or the
-// zero value if items is empty.
+// pick은 items[i]를 반환한다. i가 범위를 넘으면 마지막 항목을, items가 비어
+// 있으면 zero value를 반환한다.
 func pick[T any](items []T, i int) T {
 	if len(items) == 0 {
 		var zero T
@@ -71,11 +71,11 @@ func pick[T any](items []T, i int) T {
 	return items[i]
 }
 
-// fakeDownloader is a hand-written test double for machine.Downloader.
+// fakeDownloader는 machine.Downloader의 손으로 만든 테스트 대역이다.
 type fakeDownloader struct {
 	results []downloader.Result
 	errs    []error
-	calls   []string // campaignIDs
+	calls   []string // 호출된 campaignID 목록
 	path    string
 }
 
@@ -92,11 +92,11 @@ func (f *fakeDownloader) Path(campaignID string) string {
 	return "/data/downloads/" + campaignID + ".bin"
 }
 
-// fakeInstaller is a hand-written test double for machine.Installer.
+// fakeInstaller는 machine.Installer의 손으로 만든 테스트 대역이다.
 type fakeInstaller struct {
 	results []installer.Result
 	errs    []error
-	calls   []string // sourcePaths
+	calls   []string // 호출된 sourcePath 목록
 }
 
 func (f *fakeInstaller) Install(_ context.Context, sourcePath string) (installer.Result, error) {
@@ -105,9 +105,9 @@ func (f *fakeInstaller) Install(_ context.Context, sourcePath string) (installer
 	return pick(f.results, i), pick(f.errs, i)
 }
 
-// fakeStore is a hand-written test double for machine.StateStore. load is
-// returned as-is from Load, ignoring initialVersion (tests set up the
-// snapshot they want the machine to start from directly).
+// fakeStore는 machine.StateStore의 손으로 만든 테스트 대역이다. Load는
+// initialVersion을 무시하고 load를 그대로 반환한다(테스트가 머신의 시작
+// 스냅샷을 직접 정한다).
 type fakeStore struct {
 	load    state.Snapshot
 	loadErr error
@@ -127,8 +127,8 @@ func (f *fakeStore) Save(_ context.Context, snap state.Snapshot) error {
 	return nil
 }
 
-// lastSave returns the most recently saved snapshot, or false if nothing
-// was ever saved.
+// lastSave는 마지막으로 저장된 스냅샷을 반환한다. 저장된 적이 없으면 false를
+// 반환한다.
 func (f *fakeStore) lastSave() (state.Snapshot, bool) {
 	if len(f.saves) == 0 {
 		return state.Snapshot{}, false
