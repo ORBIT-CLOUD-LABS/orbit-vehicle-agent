@@ -17,8 +17,8 @@ import (
 	"strings"
 )
 
-// campaignIDPattern keeps campaignID, which becomes part of a local file
-// name, from escaping the downloads directory.
+// campaignIDPattern은 로컬 파일 이름에 쓰이는 campaignID가 downloads
+// 디렉터리 밖을 가리키지 못하게 막는다.
 var campaignIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // ErrManifestExpired is returned when the CDN rejects the signed download
@@ -99,8 +99,8 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// Read at most one byte past fileSize: enough to detect an oversized
-		// body without writing all of it to disk.
+		// fileSize보다 1바이트만 더 읽는다. 크기 초과는 판정하되 초과분을
+		// 전부 디스크에 쓰지 않기 위해서다.
 		resp.Body = struct {
 			io.Reader
 			io.Closer

@@ -169,7 +169,7 @@ func TestDownloader_Download_StopsReadingPastFileSize(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(make([]byte, fileSize*2))
 		w.(http.Flusher).Flush()
-		// Keep the body open: a downloader that reads to EOF blocks here.
+		// body를 닫지 않고 둔다. EOF까지 읽는 다운로더는 여기서 멈춘다.
 		<-r.Context().Done()
 	}))
 	defer server.Close()
