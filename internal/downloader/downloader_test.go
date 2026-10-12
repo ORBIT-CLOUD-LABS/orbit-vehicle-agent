@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,6 +161,33 @@ func TestDownloader_Download_ConnectionError(t *testing.T) {
 	var downloadErr *downloader.Error
 	require.ErrorAs(t, err, &downloadErr)
 	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+}
+
+// DOWNLOAD-REQ-001
+func TestDownloader_Download_StopsReadingPastFileSize(t *testing.T) {
+	const fileSize = 10
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, fileSize*2))
+		w.(http.Flusher).Flush()
+		// Keep the body open: a downloader that reads to EOF blocks here.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dataDir := t.TempDir()
+	d := downloader.New(dataDir, server.Client())
+
+	_, err := d.Download(ctx, "campaign-1", server.URL, fileSize, "deadbeef")
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.DeadlineExceeded, "download should stop once it reads past fileSize")
+	var downloadErr *downloader.Error
+	require.ErrorAs(t, err, &downloadErr)
+	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+	assertNoFilesLeft(t, dataDir, "campaign-1")
 }
 
 // DOWNLOAD-REQ-001

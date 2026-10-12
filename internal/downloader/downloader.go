@@ -99,7 +99,12 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// continue below
+		// Read at most one byte past fileSize: enough to detect an oversized
+		// body without writing all of it to disk.
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.LimitReader(resp.Body, fileSize+1), resp.Body}
 	case http.StatusForbidden, http.StatusGone:
 		return Result{}, ErrManifestExpired
 	default:
