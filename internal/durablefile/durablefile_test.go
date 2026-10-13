@@ -11,7 +11,7 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/durablefile"
 )
 
-// 이슈 #21 — 상태·다운로드·설치 파일 쓰기에 fsync 적용
+// 상태·다운로드·설치 파일 쓰기에 fsync 적용
 func TestWriteFile_CreatesFinalFileAndRemovesTemp(t *testing.T) {
 	dir := t.TempDir()
 	final := filepath.Join(dir, "state.json")
@@ -27,7 +27,6 @@ func TestWriteFile_CreatesFinalFileAndRemovesTemp(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "temp file should not remain after a successful write")
 }
 
-// 이슈 #21
 func TestWriteFile_AtomicallyReplacesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	final := filepath.Join(dir, "state.json")
@@ -45,7 +44,7 @@ func TestWriteFile_AtomicallyReplacesExistingFile(t *testing.T) {
 	assert.Len(t, entries, 1, "no leftover temp file should remain")
 }
 
-// 이슈 #21 — downloader/installer가 쓰는 스트리밍 패턴: 직접 연 파일에 쓰고
+// downloader/installer가 쓰는 스트리밍 패턴: 직접 연 파일에 쓰고
 // SyncAndClose로 내구성 있게 닫은 뒤 Rename으로 확정한다.
 func TestSyncAndCloseThenRename_StreamingPattern(t *testing.T) {
 	dir := t.TempDir()
@@ -68,7 +67,6 @@ func TestSyncAndCloseThenRename_StreamingPattern(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "temp file should not remain after a successful rename")
 }
 
-// 이슈 #21
 func TestRename_FailsWhenTempFileMissing(t *testing.T) {
 	dir := t.TempDir()
 	final := filepath.Join(dir, "firmware.bin")
@@ -80,7 +78,6 @@ func TestRename_FailsWhenTempFileMissing(t *testing.T) {
 	assert.NoFileExists(t, final)
 }
 
-// 이슈 #21
 func TestWriteFile_FailsWhenDirectoryMissing(t *testing.T) {
 	dir := t.TempDir()
 	final := filepath.Join(dir, "missing-dir", "state.json")
