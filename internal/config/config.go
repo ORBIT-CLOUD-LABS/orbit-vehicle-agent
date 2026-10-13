@@ -1,4 +1,4 @@
-// Package config loads and validates the vehicle agent's startup configuration.
+// 패키지 설정이 차량 에이전트의 시작 구성 로드 및 유효성을 검사합니다.
 package config
 
 import (
@@ -11,7 +11,7 @@ import (
 
 var vehicleIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
-// Config holds the vehicle agent's validated startup configuration.
+// Config는 차량 에이전트의 검증된 시작 구성을 보유합니다.
 type Config struct {
 	VehicleID       string
 	VehicleModel    string
@@ -24,8 +24,9 @@ type Config struct {
 	InitialVersion  string
 }
 
-// Load reads the agent configuration using getenv and validates it.
-// getenv is typically os.Getenv; a fake is used in tests.
+// LoadFromEnv는 환경 변수를 읽고 Config를 반환합니다. 
+// 필수 환경 변수가 없거나 잘못된 경우 오류를 반환합니다.
+
 func Load(getenv func(string) string) (Config, error) {
 	vehicleID, err := requireEnv(getenv, "VEHICLE_ID")
 	if err != nil {
@@ -98,7 +99,7 @@ func Load(getenv func(string) string) (Config, error) {
 func requireEnv(getenv func(string) string, key string) (string, error) {
 	value := getenv(key)
 	if value == "" {
-		return "", fmt.Errorf("%s: required environment variable is not set", key)
+		return "", fmt.Errorf("%s: 요청된 환경 변수가 설정되지 않았습니다.", key)
 	}
 	return value, nil
 }
@@ -109,10 +110,10 @@ func validateHTTPURL(raw string) error {
 		return fmt.Errorf("parse url: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("scheme must be http or https, got %q", parsed.Scheme)
+		return fmt.Errorf("스키마는 http 또는 https여야 합니다., %q", parsed.Scheme)
 	}
 	if parsed.Host == "" {
-		return fmt.Errorf("host is required")
+		return fmt.Errorf("요청된 호스트는 필수입니다.")
 	}
 	return nil
 }
@@ -120,10 +121,10 @@ func validateHTTPURL(raw string) error {
 func parsePositiveSeconds(raw string) (time.Duration, error) {
 	seconds, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, fmt.Errorf("parse integer seconds: %w", err)
+		return 0, fmt.Errorf("정수 초를 파싱할 수 없습니다: %w", err)
 	}
 	if seconds <= 0 {
-		return 0, fmt.Errorf("must be a positive integer, got %d", seconds)
+		return 0, fmt.Errorf("양의 정수여야 합니다., %d", seconds)
 	}
 	return time.Duration(seconds) * time.Second, nil
 }
