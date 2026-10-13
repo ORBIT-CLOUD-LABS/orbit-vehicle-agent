@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/durablefile"
 )
 
 // FailureReason은 설치 실패의 종류다. 업데이트 결과를 보고하는 호출자
@@ -76,18 +78,18 @@ func (i *Installer) Install(ctx context.Context, sourcePath string) (Result, err
 	}
 
 	_, copyErr := io.Copy(dst, src)
-	closeErr := dst.Close()
-
 	if copyErr != nil {
+		dst.Close()
 		os.Remove(tmpPath)
 		return Result{}, &Error{Reason: FailureInstallFailed, Err: fmt.Errorf("copy firmware to install location: %w", copyErr)}
 	}
-	if closeErr != nil {
+
+	if err := durablefile.SyncAndClose(dst); err != nil {
 		os.Remove(tmpPath)
-		return Result{}, &Error{Reason: FailureInstallFailed, Err: fmt.Errorf("close temp install file: %w", closeErr)}
+		return Result{}, &Error{Reason: FailureInstallFailed, Err: err}
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := durablefile.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return Result{}, fmt.Errorf("rename installed file: %w", err)
 	}

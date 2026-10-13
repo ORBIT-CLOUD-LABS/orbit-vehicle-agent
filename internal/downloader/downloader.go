@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/durablefile"
 )
 
 // campaignIDPattern은 로컬 파일 이름에 쓰이는 campaignID가 downloads
@@ -139,7 +141,7 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 		return Result{}, &Error{Reason: FailureHashMismatch, Err: fmt.Errorf("sha256 %s does not match expected %s", actualSHA256, expectedSHA256)}
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := durablefile.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return Result{}, fmt.Errorf("rename downloaded file: %w", err)
 	}
@@ -148,7 +150,8 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 }
 
 // writeAndHash는 src를 tmpPath에 새 파일로 스트리밍해 쓰면서 SHA-256
-// 다이제스트를 계산한다. 메모리에는 버퍼 하나 분량만 둔다.
+// 다이제스트를 계산하고, 쓴 내용을 fsync해 디스크에 반영한다. 메모리에는
+// 버퍼 하나 분량만 둔다.
 func writeAndHash(tmpPath string, src io.Reader) (written int64, sha256Hex string, err error) {
 	file, err := os.Create(tmpPath)
 	if err != nil {
@@ -157,13 +160,13 @@ func writeAndHash(tmpPath string, src io.Reader) (written int64, sha256Hex strin
 
 	hasher := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(file, hasher), src)
-	closeErr := file.Close()
-
 	if copyErr != nil {
+		file.Close()
 		return written, "", copyErr
 	}
-	if closeErr != nil {
-		return written, "", fmt.Errorf("close temp download file: %w", closeErr)
+
+	if err := durablefile.SyncAndClose(file); err != nil {
+		return written, "", err
 	}
 
 	return written, hex.EncodeToString(hasher.Sum(nil)), nil
