@@ -190,7 +190,7 @@ func TestDownloader_Download_StopsReadingPastFileSize(t *testing.T) {
 	assertNoFilesLeft(t, dataDir, "campaign-1")
 }
 
-// 이슈 #22 — 본문 전송 도중 CDN이 멈추면 idle 타임아웃으로 다운로드를 중단한다.
+// 본문 전송 도중 CDN이 멈추면 idle 타임아웃으로 다운로드를 중단한다.
 func TestDownloader_Download_IdleReadTimeout(t *testing.T) {
 	const fileSize = 10
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
