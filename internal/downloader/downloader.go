@@ -14,7 +14,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// defaultReadIdleTimeout은 WithReadIdleTimeout을 주지 않았을 때, 펌웨어 본문을
+// 읽는 동안 다음 바이트가 오지 않으면 다운로드를 실패로 처리하는 idle 시간이다.
+const defaultReadIdleTimeout = 30 * time.Second
 
 // campaignIDPattern은 로컬 파일 이름에 쓰이는 campaignID가 downloads
 // 디렉터리 밖을 가리키지 못하게 막는다.
@@ -58,17 +63,38 @@ type Result struct {
 
 // Downloader는 서명된 CDN URL에서 펌웨어 이미지를 DataDir/downloads로 스트리밍해 받는다.
 type Downloader struct {
-	httpClient *http.Client
-	dataDir    string
+	httpClient      *http.Client
+	dataDir         string
+	readIdleTimeout time.Duration
+}
+
+// Option은 Downloader 설정을 바꾼다.
+type Option func(*Downloader)
+
+// WithReadIdleTimeout은 펌웨어 본문을 읽는 동안 허용하는 idle 시간을 정한다.
+// 이 시간 안에 다음 바이트가 오지 않으면 다운로드를 DOWNLOAD_FAILED로
+// 실패시킨다.
+func WithReadIdleTimeout(d time.Duration) Option {
+	return func(dl *Downloader) {
+		dl.readIdleTimeout = d
+	}
 }
 
 // New는 받은 이미지를 dataDir 아래에 저장하는 Downloader를 만든다.
 // httpClient가 nil이면 http.DefaultClient를 쓴다.
-func New(dataDir string, httpClient *http.Client) *Downloader {
+func New(dataDir string, httpClient *http.Client, opts ...Option) *Downloader {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Downloader{httpClient: httpClient, dataDir: dataDir}
+	dl := &Downloader{
+		httpClient:      httpClient,
+		dataDir:         dataDir,
+		readIdleTimeout: defaultReadIdleTimeout,
+	}
+	for _, opt := range opts {
+		opt(dl)
+	}
+	return dl
 }
 
 // Path는 campaignID의 다운로드가 완료되면 저장되는(또는 저장될) 로컬 경로를
@@ -91,7 +117,12 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 		return Result{}, fmt.Errorf("campaign id %q: must contain only letters, digits, or hyphens", campaignID)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	// 본문 읽기가 idle 타임아웃에 걸리면 readCtx를 취소해 막혀 있는 Read를
+	// 풀어준다. ctx 자체의 취소(상위 체크인 루프 종료 등)도 그대로 전달된다.
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+
+	req, err := http.NewRequestWithContext(readCtx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("build download request: %w", err)
 	}
@@ -104,12 +135,15 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		idle := newIdleTimeoutReader(resp.Body, d.readIdleTimeout, cancelRead)
+		defer idle.Stop()
+
 		// fileSize보다 1바이트만 더 읽는다. 크기 초과는 판정하되 초과분을
 		// 전부 디스크에 쓰지 않기 위해서다.
 		resp.Body = struct {
 			io.Reader
 			io.Closer
-		}{io.LimitReader(resp.Body, fileSize+1), resp.Body}
+		}{io.LimitReader(idle, fileSize+1), resp.Body}
 	case http.StatusForbidden, http.StatusGone:
 		return Result{}, ErrManifestExpired
 	default:
@@ -145,6 +179,40 @@ func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL strin
 	}
 
 	return Result{Path: path, Size: written}, nil
+}
+
+// idleTimeoutReader는 Read 호출 사이에 idle 시간 제한을 둔다. Read가 성공할
+// 때마다 타이머를 다시 늘리고, timeout 안에 다음 Read가 오지 않으면 cancel을
+// 호출해 막혀 있는 요청을 풀어준다.
+type idleTimeoutReader struct {
+	io.Reader
+	timeout time.Duration
+	timer   *time.Timer
+}
+
+func newIdleTimeoutReader(r io.Reader, timeout time.Duration, cancel context.CancelFunc) *idleTimeoutReader {
+	return &idleTimeoutReader{
+		Reader:  r,
+		timeout: timeout,
+		timer:   time.AfterFunc(timeout, cancel),
+	}
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil {
+		r.timer.Stop()
+	} else {
+		r.timer.Reset(r.timeout)
+	}
+	return n, err
+}
+
+// Stop은 idle 타이머를 멈춘다. 본문을 다 읽었거나(Read가 에러를 반환) 더
+// 이상 읽지 않기로 한 뒤 호출해, 남은 타이머가 뒤늦게 cancel을 호출하지
+// 않게 한다.
+func (r *idleTimeoutReader) Stop() {
+	r.timer.Stop()
 }
 
 // writeAndHash는 src를 tmpPath에 새 파일로 스트리밍해 쓰면서 SHA-256
