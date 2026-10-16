@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/durablefile"
 )
 
 // Status는 차량 에이전트의 현재 수명 주기 단계를 나타냅니다.
@@ -142,11 +144,8 @@ func (s *Store) Save(ctx context.Context, snap Snapshot) error {
 	}
 
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("임시 상태 파일 쓰기: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("임시 상태 파일 이름 변경: %w", err)
+	if err := durablefile.WriteFile(tmp, s.path, data, 0o600); err != nil {
+		return fmt.Errorf("상태 파일 내구성 있게 쓰기: %w", err)
 	}
 	return nil
 }
