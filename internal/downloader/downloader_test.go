@@ -190,6 +190,34 @@ func TestDownloader_Download_StopsReadingPastFileSize(t *testing.T) {
 	assertNoFilesLeft(t, dataDir, "campaign-1")
 }
 
+// 본문 전송 도중 CDN이 멈추면 idle 타임아웃으로 다운로드를 중단한다.
+func TestDownloader_Download_IdleReadTimeout(t *testing.T) {
+	const fileSize = 10
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("abc"))
+		w.(http.Flusher).Flush()
+		// 남은 바이트를 보내지 않고 멈춘다. idle 타임아웃이 없으면 ctx가
+		// 취소될 때까지(여기서는 걸지 않음) 무기한 대기한다.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	d := downloader.New(dataDir, server.Client(), downloader.WithReadIdleTimeout(50*time.Millisecond))
+
+	start := time.Now()
+	_, err := d.Download(context.Background(), "campaign-1", server.URL, fileSize, "deadbeef")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 5*time.Second, "idle timeout should cut the stalled download short")
+
+	var downloadErr *downloader.Error
+	require.ErrorAs(t, err, &downloadErr)
+	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+	assertNoFilesLeft(t, dataDir, "campaign-1")
+}
+
 // DOWNLOAD-REQ-001
 func TestDownloader_Download_RejectsUnsafeCampaignID(t *testing.T) {
 	tests := []struct {
