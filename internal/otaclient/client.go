@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -121,7 +122,7 @@ type Manifest struct {
 	URLExpiresAt  time.Time `json:"urlExpiresAt"`
 }
 
-// GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다. 
+// GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다.
 // 서버는 이 호출에서 대상 적격성을 다시 확인하므로, 호출자는 CodeNotUpdateTarget 및 CodeCampaignInactive를 "IDLE로 돌아가기"로 처리해야 하며 실패로 간주하지 않아야 합니다.
 
 func (c *Client) GetManifest(ctx context.Context, vehicleID, campaignID, vehicleToken string) (Manifest, error) {
@@ -167,10 +168,21 @@ func (c *Client) do(ctx context.Context, method, path, bearerToken string, body,
 		return parseAPIError(resp.StatusCode, respBody)
 	}
 
-	if out != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("decode response body: %w", err)
-		}
+	if out == nil {
+		return nil
+	}
+
+	var envelope struct {
+		Data *json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return fmt.Errorf("decode response envelope: %w", err)
+	}
+	if envelope.Data == nil {
+		return errors.New("ota server response is missing data")
+	}
+	if err := json.Unmarshal(*envelope.Data, out); err != nil {
+		return fmt.Errorf("decode response data: %w", err)
 	}
 	return nil
 }
