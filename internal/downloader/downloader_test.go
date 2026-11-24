@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -113,6 +114,7 @@ func TestDownloader_Download_SignatureOrExpiredURL(t *testing.T) {
 
 			_, err := d.Download(context.Background(), 1, server.URL, 10, "deadbeef")
 			require.ErrorIs(t, err, downloader.ErrManifestExpired)
+			assert.EqualError(t, err, fmt.Sprintf("cdn returned http %d: %s", tt.statusCode, downloader.ErrManifestExpired))
 
 			var httpErr *downloader.HTTPError
 			require.ErrorAs(t, err, &httpErr)

@@ -53,10 +53,11 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
+	message := fmt.Sprintf("cdn returned http %d", e.StatusCode)
 	if e.cause != nil {
-		return e.cause.Error()
+		return message + ": " + e.cause.Error()
 	}
-	return fmt.Sprintf("cdn returned http %d", e.StatusCode)
+	return message
 }
 
 func (e *HTTPError) Unwrap() error {
