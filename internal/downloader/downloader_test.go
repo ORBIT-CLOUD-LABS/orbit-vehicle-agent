@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,6 +113,10 @@ func TestDownloader_Download_SignatureOrExpiredURL(t *testing.T) {
 
 			_, err := d.Download(context.Background(), 1, server.URL, 10, "deadbeef")
 			require.ErrorIs(t, err, downloader.ErrManifestExpired)
+
+			var httpErr *downloader.HTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, tt.statusCode, httpErr.StatusCode)
 		})
 	}
 }
@@ -142,6 +148,10 @@ func TestDownloader_Download_OriginFailure(t *testing.T) {
 			var downloadErr *downloader.Error
 			require.ErrorAs(t, err, &downloadErr)
 			assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+
+			var httpErr *downloader.HTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, tt.statusCode, httpErr.StatusCode)
 		})
 	}
 }
@@ -161,6 +171,34 @@ func TestDownloader_Download_ConnectionError(t *testing.T) {
 	var downloadErr *downloader.Error
 	require.ErrorAs(t, err, &downloadErr)
 	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+
+	var connErr *net.OpError
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, "dial", connErr.Op)
+
+	var httpErr *downloader.HTTPError
+	assert.False(t, errors.As(err, &httpErr))
+}
+
+func TestDownloader_Download_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	client.Timeout = 50 * time.Millisecond
+	d := downloader.New(t.TempDir(), client)
+
+	_, err := d.Download(context.Background(), 1, server.URL, 10, "deadbeef")
+
+	var downloadErr *downloader.Error
+	require.ErrorAs(t, err, &downloadErr)
+	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
+
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	assert.True(t, netErr.Timeout())
 }
 
 // DOWNLOAD-REQ-001
