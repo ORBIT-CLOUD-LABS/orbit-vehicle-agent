@@ -239,7 +239,7 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 		return
 	}
 
-	m.finishInstall(ctx, pending, result.path)
+	m.finishInstall(ctx, pending, result.Path)
 }
 
 // resumeInstall은 다운로드를 마친 뒤 설치 중에 재시작으로 중단된 업데이트의
@@ -270,7 +270,7 @@ var (
 )
 
 type edgeDownloadResult struct {
-	path   string
+	downloader.Result
 	edgeID string
 }
 
@@ -321,7 +321,7 @@ func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Man
 		result, err := m.downloadFromEdge(ctx, manifest, edge.url)
 		// 해시가 달라도 이 Edge에서 파일을 받은 사실은 보고한다.
 		if err == nil || downloadFailureReason(err) == state.FailureHashMismatch {
-			return edgeDownloadResult{path: result.Path, edgeID: edge.edgeID}, err
+			return edgeDownloadResult{Result: result, edgeID: edge.edgeID}, err
 		}
 		if ctx.Err() != nil || !canSwitchEdge(err) {
 			return edgeDownloadResult{}, err

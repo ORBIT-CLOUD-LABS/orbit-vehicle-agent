@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,11 +37,12 @@ func TestDownloader_Download_Success(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, server.Client())
 
-	result, err := d.Download(context.Background(), 1, server.URL, int64(len(content)), sha256Hex(content))
+	result, err := d.Download(context.Background(), 1, server.URL, int64(len(content)), strings.ToUpper(sha256Hex(content)))
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(dataDir, "downloads", "1.bin"), result.Path)
 	assert.Equal(t, int64(len(content)), result.Size)
+	assert.Equal(t, sha256Hex(content), result.SHA256)
 
 	written, err := os.ReadFile(result.Path)
 	require.NoError(t, err)

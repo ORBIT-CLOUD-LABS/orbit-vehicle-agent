@@ -66,8 +66,9 @@ func (e *HTTPError) Unwrap() error {
 
 // Result는 다운로드와 검증을 마친 펌웨어 이미지 정보다.
 type Result struct {
-	Path string
-	Size int64
+	Path   string
+	Size   int64
+	SHA256 string
 }
 
 // Downloader는 서명된 CDN URL에서 펌웨어 이미지를 DataDir/downloads로 스트리밍해 받는다.
@@ -158,7 +159,7 @@ func (d *Downloader) Download(ctx context.Context, campaignID int64, downloadURL
 		return Result{}, fmt.Errorf("rename downloaded file: %w", err)
 	}
 
-	return Result{Path: path, Size: written}, nil
+	return Result{Path: path, Size: written, SHA256: actualSHA256}, nil
 }
 
 // writeAndHash는 src를 tmpPath에 새 파일로 스트리밍해 쓰면서 SHA-256
