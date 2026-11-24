@@ -45,6 +45,7 @@ const (
 type PendingUpdate struct {
 	CampaignID    int64  `json:"campaign_id"`
 	TargetVersion string `json:"target_version"`
+	EdgeID        string `json:"edge_id,omitempty"`
 }
 
 // LastUpdate는 가장 최근의 업데이트 결과이며, 다음 체크인에서 보고되고 서버가 확인하면 지워집니다.
@@ -53,6 +54,7 @@ type LastUpdate struct {
 	Result        Result        `json:"result"`
 	FailureReason FailureReason `json:"failure_reason,omitempty"`
 	FailureDetail string        `json:"failure_detail,omitempty"`
+	EdgeID        string        `json:"edge_id,omitempty"`
 	FinishedAt    time.Time     `json:"finished_at"`
 }
 
