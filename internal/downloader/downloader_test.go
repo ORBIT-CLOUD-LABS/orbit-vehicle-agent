@@ -33,10 +33,10 @@ func TestDownloader_Download_Success(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, server.Client())
 
-	result, err := d.Download(context.Background(), "campaign-1", server.URL, int64(len(content)), sha256Hex(content))
+	result, err := d.Download(context.Background(), 1, server.URL, int64(len(content)), sha256Hex(content))
 	require.NoError(t, err)
 
-	assert.Equal(t, filepath.Join(dataDir, "downloads", "campaign-1.bin"), result.Path)
+	assert.Equal(t, filepath.Join(dataDir, "downloads", "1.bin"), result.Path)
 	assert.Equal(t, int64(len(content)), result.Size)
 
 	written, err := os.ReadFile(result.Path)
@@ -58,14 +58,14 @@ func TestDownloader_Download_SizeMismatch(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, server.Client())
 
-	_, err := d.Download(context.Background(), "campaign-1", server.URL, int64(len(content))+1, sha256Hex(content))
+	_, err := d.Download(context.Background(), 1, server.URL, int64(len(content))+1, sha256Hex(content))
 	require.Error(t, err)
 
 	var downloadErr *downloader.Error
 	require.ErrorAs(t, err, &downloadErr)
 	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
 
-	assertNoFilesLeft(t, dataDir, "campaign-1")
+	assertNoFilesLeft(t, dataDir, 1)
 }
 
 // DOWNLOAD-REQ-001
@@ -79,14 +79,14 @@ func TestDownloader_Download_HashMismatch(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, server.Client())
 
-	_, err := d.Download(context.Background(), "campaign-1", server.URL, int64(len(content)), sha256Hex([]byte("different-content")))
+	_, err := d.Download(context.Background(), 1, server.URL, int64(len(content)), sha256Hex([]byte("different-content")))
 	require.Error(t, err)
 
 	var downloadErr *downloader.Error
 	require.ErrorAs(t, err, &downloadErr)
 	assert.Equal(t, downloader.FailureHashMismatch, downloadErr.Reason)
 
-	assertNoFilesLeft(t, dataDir, "campaign-1")
+	assertNoFilesLeft(t, dataDir, 1)
 }
 
 // DOWNLOAD-REQ-001
@@ -109,7 +109,7 @@ func TestDownloader_Download_SignatureOrExpiredURL(t *testing.T) {
 			dataDir := t.TempDir()
 			d := downloader.New(dataDir, server.Client())
 
-			_, err := d.Download(context.Background(), "campaign-1", server.URL, 10, "deadbeef")
+			_, err := d.Download(context.Background(), 1, server.URL, 10, "deadbeef")
 			require.ErrorIs(t, err, downloader.ErrManifestExpired)
 		})
 	}
@@ -136,7 +136,7 @@ func TestDownloader_Download_OriginFailure(t *testing.T) {
 			dataDir := t.TempDir()
 			d := downloader.New(dataDir, server.Client())
 
-			_, err := d.Download(context.Background(), "campaign-1", server.URL, 10, "deadbeef")
+			_, err := d.Download(context.Background(), 1, server.URL, 10, "deadbeef")
 			require.Error(t, err)
 
 			var downloadErr *downloader.Error
@@ -155,7 +155,7 @@ func TestDownloader_Download_ConnectionError(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, http.DefaultClient)
 
-	_, err := d.Download(context.Background(), "campaign-1", unreachableURL, 10, "deadbeef")
+	_, err := d.Download(context.Background(), 1, unreachableURL, 10, "deadbeef")
 	require.Error(t, err)
 
 	var downloadErr *downloader.Error
@@ -180,25 +180,24 @@ func TestDownloader_Download_StopsReadingPastFileSize(t *testing.T) {
 	dataDir := t.TempDir()
 	d := downloader.New(dataDir, server.Client())
 
-	_, err := d.Download(ctx, "campaign-1", server.URL, fileSize, "deadbeef")
+	_, err := d.Download(ctx, 1, server.URL, fileSize, "deadbeef")
 
 	require.Error(t, err)
 	require.NotErrorIs(t, err, context.DeadlineExceeded, "download should stop once it reads past fileSize")
 	var downloadErr *downloader.Error
 	require.ErrorAs(t, err, &downloadErr)
 	assert.Equal(t, downloader.FailureDownloadFailed, downloadErr.Reason)
-	assertNoFilesLeft(t, dataDir, "campaign-1")
+	assertNoFilesLeft(t, dataDir, 1)
 }
 
 // DOWNLOAD-REQ-001
-func TestDownloader_Download_RejectsUnsafeCampaignID(t *testing.T) {
+func TestDownloader_Download_RejectsNonPositiveCampaignID(t *testing.T) {
 	tests := []struct {
 		name       string
-		campaignID string
+		campaignID int64
 	}{
-		{name: "상위 디렉터리 이동", campaignID: "../../escaped"},
-		{name: "경로 구분자 포함", campaignID: "a/b"},
-		{name: "빈 값", campaignID: ""},
+		{name: "음수", campaignID: -1},
+		{name: "0", campaignID: 0},
 	}
 
 	for _, tt := range tests {
@@ -216,13 +215,13 @@ func TestDownloader_Download_RejectsUnsafeCampaignID(t *testing.T) {
 			_, err := d.Download(context.Background(), tt.campaignID, server.URL, int64(len(content)), sha256Hex(content))
 
 			require.Error(t, err)
-			assert.NoFileExists(t, filepath.Join(root, "escaped.bin"))
+			assert.NoDirExists(t, filepath.Join(dataDir, "downloads"))
 			assertNoFilesLeft(t, dataDir, tt.campaignID)
 		})
 	}
 }
 
-func assertNoFilesLeft(t *testing.T, dataDir, campaignID string) {
+func assertNoFilesLeft(t *testing.T, dataDir string, campaignID int64) {
 	t.Helper()
 
 	downloadsDir := filepath.Join(dataDir, "downloads")
@@ -231,5 +230,5 @@ func assertNoFilesLeft(t *testing.T, dataDir, campaignID string) {
 		return
 	}
 	require.NoError(t, err)
-	assert.Empty(t, entries, "no partial or stale files should remain after a failed %s download", campaignID)
+	assert.Empty(t, entries, "no partial or stale files should remain after a failed %d download", campaignID)
 }

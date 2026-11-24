@@ -12,13 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 )
-
-// campaignIDPattern은 로컬 파일 이름에 쓰이는 campaignID가 downloads
-// 디렉터리 밖을 가리키지 못하게 막는다.
-var campaignIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // ErrManifestExpired는 CDN이 서명된 다운로드 URL을 거부했을 때 반환된다
 // (DOWNLOAD-REQ-001: HTTP 403 서명 불일치, 410 URL 만료).
@@ -74,8 +70,8 @@ func New(dataDir string, httpClient *http.Client) *Downloader {
 // Path는 campaignID의 다운로드가 완료되면 저장되는(또는 저장될) 로컬 경로를
 // 반환한다. 재시작 후 복구하는 호출자가 Download가 이미 다 받아 둔 펌웨어를
 // 다시 받지 않고 찾을 때 쓴다.
-func (d *Downloader) Path(campaignID string) string {
-	return filepath.Join(d.dataDir, "downloads", campaignID+".bin")
+func (d *Downloader) Path(campaignID int64) string {
+	return filepath.Join(d.dataDir, "downloads", strconv.FormatInt(campaignID, 10)+".bin")
 }
 
 // Download는 downloadURL을 받아 파일 전체를 메모리에 올리지 않고
@@ -86,9 +82,9 @@ func (d *Downloader) Path(campaignID string) string {
 // 새로 받아 다시 시도한다). 그 밖의 실패(연결 오류, HTTP 404/502/504, 크기
 // 불일치, 해시 불일치)는 호출자가 분기할 수 있도록 FailureReason을 담은
 // *Error로 반환한다.
-func (d *Downloader) Download(ctx context.Context, campaignID, downloadURL string, fileSize int64, expectedSHA256 string) (Result, error) {
-	if !campaignIDPattern.MatchString(campaignID) {
-		return Result{}, fmt.Errorf("campaign id %q: must contain only letters, digits, or hyphens", campaignID)
+func (d *Downloader) Download(ctx context.Context, campaignID int64, downloadURL string, fileSize int64, expectedSHA256 string) (Result, error) {
+	if campaignID <= 0 {
+		return Result{}, fmt.Errorf("campaign id %d: must be positive", campaignID)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)

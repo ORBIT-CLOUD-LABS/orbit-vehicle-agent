@@ -84,7 +84,7 @@ func (c *Client) Register(ctx context.Context, enrollmentKey string, req Registe
 
 // LastUpdate는 마지막으로 시도한 업데이트의 결과를 보고합니다.
 type LastUpdate struct {
-	CampaignID    string    `json:"campaignId"`
+	CampaignID    int64     `json:"campaignId"`
 	Result        string    `json:"result"`
 	FailureReason string    `json:"failureReason,omitempty"`
 	FailureDetail string    `json:"failureDetail,omitempty"`
@@ -99,9 +99,9 @@ type CheckInRequest struct {
 
 // CheckInResponse는 차량이 업데이트 대상인지, 언제 다시 체크인해야 하는지 알려줍니다.
 type CheckInResponse struct {
-	UpdateTarget       bool   `json:"updateTarget"`
-	CampaignID         string `json:"campaignId,omitempty"`
-	NextCheckInSeconds int    `json:"nextCheckInSeconds"`
+	UpdateTarget       bool  `json:"updateTarget"`
+	CampaignID         int64 `json:"campaignId,omitempty"`
+	NextCheckInSeconds int   `json:"nextCheckInSeconds"`
 }
 
 // CheckIn은 현재 버전과, 있다면 마지막 업데이트의 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
@@ -113,12 +113,15 @@ func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, re
 	if err := c.do(ctx, http.MethodPost, path, vehicleToken, req, &resp); err != nil {
 		return CheckInResponse{}, err
 	}
+	if resp.UpdateTarget && resp.CampaignID <= 0 {
+		return CheckInResponse{}, fmt.Errorf("check-in target campaign id %d: must be positive", resp.CampaignID)
+	}
 	return resp, nil
 }
 
 // manifest는 캠페인을 위해 다운로드한 펌웨어를 설명합니다(MANIFEST-REQ-001).
 type Manifest struct {
-	CampaignID    string    `json:"campaignId"`
+	CampaignID    int64     `json:"campaignId"`
 	TargetVersion string    `json:"targetVersion"`
 	FileSize      int64     `json:"fileSize"`
 	SHA256        string    `json:"sha256"`
@@ -129,11 +132,17 @@ type Manifest struct {
 // GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다.
 // 서버는 이 호출에서 대상 적격성을 다시 확인하므로, 호출자는 CodeNotUpdateTarget 및 CodeCampaignInactive를 "IDLE로 돌아가기"로 처리해야 하며 실패로 간주하지 않아야 합니다.
 
-func (c *Client) GetManifest(ctx context.Context, vehicleID, campaignID, vehicleToken string) (Manifest, error) {
+func (c *Client) GetManifest(ctx context.Context, vehicleID string, campaignID int64, vehicleToken string) (Manifest, error) {
 	var resp Manifest
-	path := fmt.Sprintf("/api/v1/vehicles/%s/campaigns/%s/manifest", url.PathEscape(vehicleID), url.PathEscape(campaignID))
+	path := fmt.Sprintf("/api/v1/vehicles/%s/campaigns/%d/manifest", url.PathEscape(vehicleID), campaignID)
 	if err := c.do(ctx, http.MethodGet, path, vehicleToken, nil, &resp); err != nil {
 		return Manifest{}, err
+	}
+	if resp.CampaignID <= 0 {
+		return Manifest{}, fmt.Errorf("manifest campaign id %d: must be positive", resp.CampaignID)
+	}
+	if resp.CampaignID != campaignID {
+		return Manifest{}, fmt.Errorf("manifest campaign id %d does not match requested id %d", resp.CampaignID, campaignID)
 	}
 	return resp, nil
 }

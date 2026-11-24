@@ -27,13 +27,13 @@ const defaultCheckInInterval = 30 * time.Second
 type OTAClient interface {
 	Register(ctx context.Context, enrollmentKey string, req otaclient.RegisterRequest) (otaclient.RegisterResponse, error)
 	CheckIn(ctx context.Context, vehicleID, vehicleToken string, req otaclient.CheckInRequest) (otaclient.CheckInResponse, error)
-	GetManifest(ctx context.Context, vehicleID, campaignID, vehicleToken string) (otaclient.Manifest, error)
+	GetManifest(ctx context.Context, vehicleID string, campaignID int64, vehicleToken string) (otaclient.Manifest, error)
 }
 
 // Downloader는 상태 머신이 호출하는 downloader.Downloader의 메서드 집합이다.
 type Downloader interface {
-	Download(ctx context.Context, campaignID, downloadURL string, fileSize int64, expectedSHA256 string) (downloader.Result, error)
-	Path(campaignID string) string
+	Download(ctx context.Context, campaignID int64, downloadURL string, fileSize int64, expectedSHA256 string) (downloader.Result, error)
+	Path(campaignID int64) string
 }
 
 // Installer는 상태 머신이 호출하는 installer.Installer의 메서드 집합이다.
@@ -187,7 +187,7 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 // (이슈 #12: "상태 전이는 다음 상태를 먼저 저장한 뒤 동작합니다"). 도중의
 // 실패는 결과로 기록하고 IDLE로 돌아간다. 일시적 실패는 상태를 바꾸지 않아
 // 다음 체크인 주기에 처음부터 다시 시도한다.
-func (m *Machine) performUpdate(ctx context.Context, campaignID string) {
+func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 	manifest, outcome, err := m.fetchManifest(ctx, campaignID)
 	switch outcome {
 	case manifestNotTarget:
@@ -237,7 +237,7 @@ func (m *Machine) resumeInstall(ctx context.Context) {
 	m.finishInstall(ctx, pending.CampaignID, pending.TargetVersion, sourcePath)
 }
 
-func (m *Machine) finishInstall(ctx context.Context, campaignID, targetVersion, sourcePath string) {
+func (m *Machine) finishInstall(ctx context.Context, campaignID int64, targetVersion, sourcePath string) {
 	_, err := m.installer.Install(ctx, sourcePath)
 	if err != nil {
 		reason, detail := classifyInstallFailure(err)
@@ -288,7 +288,7 @@ const (
 	manifestError
 )
 
-func (m *Machine) fetchManifest(ctx context.Context, campaignID string) (otaclient.Manifest, manifestOutcome, error) {
+func (m *Machine) fetchManifest(ctx context.Context, campaignID int64) (otaclient.Manifest, manifestOutcome, error) {
 	manifest, err := m.getManifest(ctx, campaignID)
 	if err == nil {
 		return manifest, manifestOK, nil
@@ -306,7 +306,7 @@ func (m *Machine) fetchManifest(ctx context.Context, campaignID string) (otaclie
 
 // recordFailure는 실패한 업데이트 결과를 저장하고 IDLE로 돌아가, 다음
 // 체크인에서 실패를 보고할 수 있게 한다.
-func (m *Machine) recordFailure(ctx context.Context, campaignID string, reason state.FailureReason, detail string) {
+func (m *Machine) recordFailure(ctx context.Context, campaignID int64, reason state.FailureReason, detail string) {
 	next := state.Snapshot{
 		VehicleID:      m.snap.VehicleID,
 		Status:         state.StatusIdle,
@@ -324,7 +324,7 @@ func (m *Machine) recordFailure(ctx context.Context, campaignID string, reason s
 
 // recordSuccess는 성공한 업데이트 결과를 저장하고 새 버전의 IDLE로 돌아가,
 // 다음 체크인에서 성공을 보고할 수 있게 한다.
-func (m *Machine) recordSuccess(ctx context.Context, campaignID, targetVersion string) {
+func (m *Machine) recordSuccess(ctx context.Context, campaignID int64, targetVersion string) {
 	next := state.Snapshot{
 		VehicleID:      m.snap.VehicleID,
 		Status:         state.StatusIdle,
@@ -405,7 +405,7 @@ func (m *Machine) checkIn(ctx context.Context) (otaclient.CheckInResponse, error
 	return resp, err
 }
 
-func (m *Machine) getManifest(ctx context.Context, campaignID string) (otaclient.Manifest, error) {
+func (m *Machine) getManifest(ctx context.Context, campaignID int64) (otaclient.Manifest, error) {
 	var resp otaclient.Manifest
 	err := m.callWithReregister(ctx, func() error {
 		var innerErr error

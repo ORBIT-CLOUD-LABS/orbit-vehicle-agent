@@ -94,7 +94,7 @@ func TestMachine_Run_ClearsLastUpdateAfterSuccessfulCheckIn(t *testing.T) {
 		Status:         state.StatusIdle,
 		CurrentVersion: "1.0.0",
 		LastUpdate: &state.LastUpdate{
-			CampaignID: "cmp-0",
+			CampaignID: 2,
 			Result:     state.ResultSucceeded,
 			FinishedAt: time.Now().Add(-time.Minute),
 		},
@@ -119,9 +119,9 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 		manifestResponses: []otaclient.Manifest{{
-			CampaignID:    "cmp-1",
+			CampaignID:    1,
 			TargetVersion: "1.1.0",
 			FileSize:      10,
 			SHA256:        "abc",
@@ -130,7 +130,7 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
-	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
+	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
@@ -141,7 +141,7 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 	require.Len(t, store.saves, 3, "DOWNLOADING, INSTALLING, 결과(IDLE) 순으로 저장되어야 한다")
 	assert.Equal(t, state.StatusDownloading, store.saves[0].Status)
 	require.NotNil(t, store.saves[0].PendingUpdate)
-	assert.Equal(t, "cmp-1", store.saves[0].PendingUpdate.CampaignID)
+	assert.Equal(t, int64(1), store.saves[0].PendingUpdate.CampaignID)
 	assert.Equal(t, state.StatusInstalling, store.saves[1].Status)
 
 	final := store.saves[2]
@@ -150,10 +150,10 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 	assert.Equal(t, "1.1.0", final.CurrentVersion)
 	require.NotNil(t, final.LastUpdate)
 	assert.Equal(t, state.ResultSucceeded, final.LastUpdate.Result)
-	assert.Equal(t, "cmp-1", final.LastUpdate.CampaignID)
+	assert.Equal(t, int64(1), final.LastUpdate.CampaignID)
 
-	assert.Equal(t, []string{"cmp-1"}, dl.calls)
-	assert.Equal(t, []string{"/data/downloads/cmp-1.bin"}, inst.calls)
+	assert.Equal(t, []int64{1}, dl.calls)
+	assert.Equal(t, []string{"/data/downloads/1.bin"}, inst.calls)
 }
 
 // DOWNLOAD-REQ-001: 다운로드 실패는 DOWNLOAD_FAILED로 저장하고 IDLE로 돌아간다.
@@ -163,8 +163,8 @@ func TestMachine_Run_DownloadFailure_RecordsDownloadFailed(t *testing.T) {
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
-		manifestResponses: []otaclient.Manifest{{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
+		manifestResponses: []otaclient.Manifest{{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
@@ -193,8 +193,8 @@ func TestMachine_Run_HashMismatch_RecordsHashMismatch(t *testing.T) {
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
-		manifestResponses: []otaclient.Manifest{{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
+		manifestResponses: []otaclient.Manifest{{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
@@ -218,12 +218,12 @@ func TestMachine_Run_InstallFailure_RecordsInstallFailed(t *testing.T) {
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
-		manifestResponses: []otaclient.Manifest{{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
+		manifestResponses: []otaclient.Manifest{{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
-	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
+	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{errs: []error{&installer.Error{Reason: installer.FailureInstallFailed, Err: errBoom}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
@@ -256,7 +256,7 @@ func TestMachine_Run_ManifestNotTarget_GoesIdleWithoutFailureResult(t *testing.T
 
 			ota := &fakeOTA{
 				registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-				checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
+				checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 				manifestErrs:      []error{&otaclient.APIError{StatusCode: 409, Code: tt.code}},
 			}
 			ota.onCheckIn = func(int) { cancel() }
@@ -287,7 +287,7 @@ func TestMachine_Run_ManifestTransientError_LeavesStateUnchangedForNextCycle(t *
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 		manifestErrs:      []error{errBoom},
 	}
 	ota.onCheckIn = func(int) { cancel() }
@@ -308,17 +308,17 @@ func TestMachine_Run_CDNRejectsURL_RefetchesManifestAndRetriesDownload(t *testin
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 		manifestResponses: []otaclient.Manifest{
-			{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/old"},
-			{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/new"},
+			{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/old"},
+			{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/new"},
 		},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
 	dl := &fakeDownloader{
 		errs:    []error{downloader.ErrManifestExpired, nil},
-		results: []downloader.Result{{}, {Path: "/data/downloads/cmp-1.bin", Size: 10}},
+		results: []downloader.Result{{}, {Path: "/data/downloads/1.bin", Size: 10}},
 	}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
@@ -346,17 +346,17 @@ func TestMachine_Run_RestartRecovery_Downloading_RefetchesManifestAndRestartsDow
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
 		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: false, NextCheckInSeconds: 0}},
-		manifestResponses: []otaclient.Manifest{{CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
+		manifestResponses: []otaclient.Manifest{{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
-	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
+	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{
 		VehicleID:      "v1",
 		Status:         state.StatusDownloading,
 		CurrentVersion: "1.0.0",
-		PendingUpdate:  &state.PendingUpdate{CampaignID: "cmp-1", TargetVersion: "1.1.0"},
+		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0"},
 	}}
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
@@ -372,7 +372,7 @@ func TestMachine_Run_RestartRecovery_Downloading_RefetchesManifestAndRestartsDow
 	lastUpdate := ota.checkInCalls[0].LastUpdate
 	require.NotNil(t, lastUpdate, "복구된 결과는 다음 체크인에 보고되어야 한다")
 	assert.Equal(t, "SUCCEEDED", lastUpdate.Result)
-	assert.Equal(t, "cmp-1", lastUpdate.CampaignID)
+	assert.Equal(t, int64(1), lastUpdate.CampaignID)
 }
 
 // 재시작 복구: INSTALLING 상태였으면 다시 다운로드하지 않고 설치만 재수행한다.
@@ -386,13 +386,13 @@ func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
-	dl := &fakeDownloader{path: "/data/downloads/cmp-1.bin"}
+	dl := &fakeDownloader{path: "/data/downloads/1.bin"}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{
 		VehicleID:      "v1",
 		Status:         state.StatusInstalling,
 		CurrentVersion: "1.0.0",
-		PendingUpdate:  &state.PendingUpdate{CampaignID: "cmp-1", TargetVersion: "1.1.0"},
+		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0"},
 	}}
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
@@ -401,7 +401,7 @@ func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(
 
 	assert.Empty(t, dl.calls, "INSTALLING 복구는 다시 다운로드하지 않아야 한다")
 	assert.Empty(t, ota.manifestCalls, "INSTALLING 복구는 매니페스트를 다시 요청하지 않아야 한다")
-	require.Equal(t, []string{"/data/downloads/cmp-1.bin"}, inst.calls)
+	require.Equal(t, []string{"/data/downloads/1.bin"}, inst.calls)
 
 	require.GreaterOrEqual(t, len(ota.checkInCalls), 1)
 	lastUpdate := ota.checkInCalls[0].LastUpdate
@@ -444,9 +444,9 @@ func TestMachine_Run_GetManifestUnauthorized_ReregistersAndRetries(t *testing.T)
 
 	ota := &fakeOTA{
 		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}, {VehicleToken: "tok-2"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: "cmp-1", NextCheckInSeconds: 0}},
+		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 		manifestErrs:      []error{&otaclient.APIError{StatusCode: 401, Code: otaclient.CodeUnauthorized}, nil},
-		manifestResponses: []otaclient.Manifest{{}, {CampaignID: "cmp-1", TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
+		manifestResponses: []otaclient.Manifest{{}, {CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/cmp-1"}},
 	}
 	ota.onGetManifest = func(call int) {
 		if call == 1 {
@@ -454,7 +454,7 @@ func TestMachine_Run_GetManifestUnauthorized_ReregistersAndRetries(t *testing.T)
 		}
 	}
 
-	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/cmp-1.bin", Size: 10}}}
+	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
