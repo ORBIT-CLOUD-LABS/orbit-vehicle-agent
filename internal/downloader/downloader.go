@@ -46,6 +46,24 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+// HTTPError는 CDN이 반환한 실패 응답의 HTTP 상태 코드를 담는다.
+type HTTPError struct {
+	StatusCode int
+	cause      error
+}
+
+func (e *HTTPError) Error() string {
+	message := fmt.Sprintf("cdn returned http %d", e.StatusCode)
+	if e.cause != nil {
+		return message + ": " + e.cause.Error()
+	}
+	return message
+}
+
+func (e *HTTPError) Unwrap() error {
+	return e.cause
+}
+
 // Result는 다운로드와 검증을 마친 펌웨어 이미지 정보다.
 type Result struct {
 	Path string
@@ -78,10 +96,10 @@ func (d *Downloader) Path(campaignID int64) string {
 // <dataDir>/downloads/<campaignID>.bin에 쓴 뒤, 쓴 크기를 fileSize와,
 // SHA-256 다이제스트를 expectedSHA256(hex)과 비교해 검증한다.
 //
-// HTTP 403/410 응답이면 ErrManifestExpired를 반환한다(호출자는 매니페스트를
-// 새로 받아 다시 시도한다). 그 밖의 실패(연결 오류, HTTP 404/502/504, 크기
-// 불일치, 해시 불일치)는 호출자가 분기할 수 있도록 FailureReason을 담은
-// *Error로 반환한다.
+// 실패한 HTTP 응답은 errors.As로 *HTTPError를 확인할 수 있다. 403/410
+// 응답은 errors.Is로 ErrManifestExpired도 확인할 수 있다. 다른 HTTP 응답
+// 오류와 연결 오류, 크기 및 해시 불일치는 FailureReason을 담은 *Error로
+// 반환한다. 연결 오류와 타임아웃의 원본 오류는 래핑 체인에 남는다.
 func (d *Downloader) Download(ctx context.Context, campaignID int64, downloadURL string, fileSize int64, expectedSHA256 string) (Result, error) {
 	if campaignID <= 0 {
 		return Result{}, fmt.Errorf("campaign id %d: must be positive", campaignID)
@@ -107,9 +125,9 @@ func (d *Downloader) Download(ctx context.Context, campaignID int64, downloadURL
 			io.Closer
 		}{io.LimitReader(resp.Body, fileSize+1), resp.Body}
 	case http.StatusForbidden, http.StatusGone:
-		return Result{}, ErrManifestExpired
+		return Result{}, &HTTPError{StatusCode: resp.StatusCode, cause: ErrManifestExpired}
 	default:
-		return Result{}, &Error{Reason: FailureDownloadFailed, Err: fmt.Errorf("cdn returned http %d", resp.StatusCode)}
+		return Result{}, &Error{Reason: FailureDownloadFailed, Err: &HTTPError{StatusCode: resp.StatusCode}}
 	}
 
 	path := d.Path(campaignID)

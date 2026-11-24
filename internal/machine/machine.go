@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"time"
 
 	"go.uber.org/zap"
@@ -22,6 +25,11 @@ import (
 // 있는 nextCheckInSeconds를 주지 않거나 체크인 호출이 실패하면 쓰는 간격이다
 // (VEHICLE-REQ-001. flow.md의 예시 응답이 30을 쓴다).
 const defaultCheckInInterval = 30 * time.Second
+
+const (
+	edgeRetryLimit    = 2
+	edgeRetryInterval = 250 * time.Millisecond
+)
 
 // OTAClient는 상태 머신이 호출하는 otaclient.Client의 메서드 집합이다.
 type OTAClient interface {
@@ -212,7 +220,7 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 			return
 		}
 		if errors.Is(dlErr, errAbortManifestError) {
-			m.logger.Warn("refresh manifest after cdn url rejection failed, retrying next cycle", zap.Error(dlErr))
+			m.logger.Warn("refresh manifest failed, retrying next cycle", zap.Error(dlErr))
 			return
 		}
 		reason, detail := classifyDownloadFailure(dlErr)
@@ -253,16 +261,19 @@ func (m *Machine) finishInstall(ctx context.Context, campaignID int64, targetVer
 var (
 	errAbortManifestNotTarget = errors.New("manifest refresh: no longer an update target")
 	errAbortManifestError     = errors.New("manifest refresh failed")
+	errAllEdgesFailed         = errors.New("all download edges failed")
+	errDownloadURLsExpired    = errors.New("download URLs expired")
 )
 
-// downloadWithManifestRetry는 manifest의 펌웨어를 다운로드한다. CDN이 서명
-// URL을 거부하면(downloader.ErrManifestExpired) 매니페스트를 한 번 새로 받아
-// 다시 다운로드한다 (이슈 #12: "CDN URL 거부 시 매니페스트 재요청 후
-// 재다운로드"). 이때 호출자가 (바뀌었을 수 있는) CampaignID/TargetVersion을
-// 이어서 써야 하므로 *manifest를 새 매니페스트로 덮어쓴다.
+// downloadWithManifestRetry는 URL이 만료됐거나 Edge에서 거부됐거나 모든
+// Edge가 실패하면 매니페스트를 한 번 새로 받아 새 Edge 목록으로 시도한다.
+// 호출자가 갱신된 CampaignID/TargetVersion을 사용할 수 있게 *manifest를
+// 새 매니페스트로 덮어쓴다.
 func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
-	result, err := m.downloader.Download(ctx, manifest.CampaignID, manifest.DownloadURL, manifest.FileSize, manifest.SHA256)
-	if err == nil || !errors.Is(err, downloader.ErrManifestExpired) {
+	result, err := m.downloadFromEdges(ctx, manifest)
+	if !errors.Is(err, errDownloadURLsExpired) &&
+		!errors.Is(err, downloader.ErrManifestExpired) &&
+		!errors.Is(err, errAllEdgesFailed) {
 		return result, err
 	}
 
@@ -275,7 +286,68 @@ func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otacl
 	}
 	*manifest = fresh
 
-	return m.downloader.Download(ctx, manifest.CampaignID, manifest.DownloadURL, manifest.FileSize, manifest.SHA256)
+	return m.downloadFromEdges(ctx, manifest)
+}
+
+func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
+	if expiresAt := manifest.URLExpiresAt; !expiresAt.IsZero() && !time.Now().Before(expiresAt) {
+		return downloader.Result{}, errDownloadURLsExpired
+	}
+
+	urls := make([]string, 0, 1+len(manifest.FallbackURLs))
+	urls = append(urls, manifest.DownloadURL)
+	for _, fallback := range manifest.FallbackURLs {
+		urls = append(urls, fallback.URL)
+	}
+
+	var lastErr error
+	for _, url := range urls {
+		result, err := m.downloadFromEdge(ctx, manifest, url)
+		if err == nil || ctx.Err() != nil || !canSwitchEdge(err) {
+			return result, err
+		}
+		lastErr = err
+	}
+	return downloader.Result{}, fmt.Errorf("%w: %w", errAllEdgesFailed, lastErr)
+}
+
+func (m *Machine) downloadFromEdge(ctx context.Context, manifest *otaclient.Manifest, url string) (downloader.Result, error) {
+	for retries := 0; ; retries++ {
+		result, err := m.downloader.Download(ctx, manifest.CampaignID, url, manifest.FileSize, manifest.SHA256)
+		if retries == edgeRetryLimit || !canRetryEdge(err) {
+			return result, err
+		}
+		select {
+		case <-ctx.Done():
+			return downloader.Result{}, ctx.Err()
+		case <-time.After(edgeRetryInterval):
+			if err := ctx.Err(); err != nil {
+				return downloader.Result{}, err
+			}
+		}
+	}
+}
+
+func canRetryEdge(err error) bool {
+	var httpErr *downloader.HTTPError
+	return errors.As(err, &httpErr) &&
+		(httpErr.StatusCode == http.StatusBadGateway || httpErr.StatusCode == http.StatusGatewayTimeout)
+}
+
+func canSwitchEdge(err error) bool {
+	var httpErr *downloader.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode >= http.StatusInternalServerError && httpErr.StatusCode < 600
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var connErr *net.OpError
+	if errors.As(err, &connErr) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // manifestOutcome은 매니페스트 조회 결과를 분류해, 호출자가 "더 이상 대상
