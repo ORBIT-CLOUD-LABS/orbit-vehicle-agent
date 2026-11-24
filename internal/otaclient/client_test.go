@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,46 +16,94 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 )
 
-func writeJSONError(w http.ResponseWriter, statusCode int, code string) {
+func writeAPIResponse(t *testing.T, w http.ResponseWriter, statusCode int, code, message string, data any) {
+	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": code})
+	assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+		"isSuccess": statusCode < http.StatusBadRequest,
+		"code":      code,
+		"message":   message,
+		"data":      data,
+		"error":     nil,
+	}))
 }
 
 // VEHICLE-REQ-002
 func TestClient_Register_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/vehicles/register", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "Bearer enroll-key", r.Header.Get("Authorization"))
+	tests := []struct {
+		code       string
+		statusCode int
+		message    string
+	}{
+		{code: "CREATED", statusCode: http.StatusCreated, message: "리소스를 생성했습니다."},
+		{code: "OK", statusCode: http.StatusOK, message: "요청에 성공했습니다."},
+	}
 
-		var body otaclient.RegisterRequest
-		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		assert.Equal(t, "car-0001", body.VehicleID)
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/vehicles/register", r.URL.Path)
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "Bearer enroll-key", r.Header.Get("Authorization"))
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(otaclient.RegisterResponse{VehicleToken: "token-abc"})
-	}))
-	defer server.Close()
+				var body otaclient.RegisterRequest
+				assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				assert.Equal(t, "car-0001", body.VehicleID)
 
-	client := otaclient.New(server.URL, server.Client())
-	resp, err := client.Register(context.Background(), "enroll-key", otaclient.RegisterRequest{
-		VehicleID:      "car-0001",
-		Model:          "model-x",
-		HWVersion:      "hw-2",
-		Region:         "kr",
-		CurrentVersion: "1.0.0",
-	})
+				writeAPIResponse(t, w, tt.statusCode, tt.code, tt.message, otaclient.RegisterResponse{VehicleToken: "token-abc"})
+			}))
+			defer server.Close()
 
-	require.NoError(t, err)
-	assert.Equal(t, "token-abc", resp.VehicleToken)
+			client := otaclient.New(server.URL, server.Client())
+			resp, err := client.Register(context.Background(), "enroll-key", otaclient.RegisterRequest{
+				VehicleID:      "car-0001",
+				Model:          "model-x",
+				HWVersion:      "hw-2",
+				Region:         "kr",
+				CurrentVersion: "1.0.0",
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, "token-abc", resp.VehicleToken)
+		})
+	}
+}
+
+// VEHICLE-REQ-002
+func TestClient_Register_InvalidSuccessData(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "빈 본문"},
+		{name: "잘못된 JSON", body: `{"data":`},
+		{name: "data 누락", body: `{"isSuccess":true,"code":"OK","vehicleToken":"token-abc"}`},
+		{name: "data null", body: `{"isSuccess":true,"code":"OK","data":null}`},
+		{name: "data 타입 불일치", body: `{"isSuccess":true,"code":"OK","data":[]}`},
+		{name: "응답 크기 초과", body: `{"data":{"vehicleToken":"token-abc"}}` + strings.Repeat(" ", 64<<10)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+
+			client := otaclient.New(server.URL, server.Client())
+			_, err := client.Register(context.Background(), "enroll-key", otaclient.RegisterRequest{VehicleID: "car-0001"})
+
+			require.Error(t, err)
+		})
+	}
 }
 
 // VEHICLE-REQ-002
 func TestClient_Register_InvalidEnrollmentKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusUnauthorized, otaclient.CodeInvalidEnrollmentKey)
+		writeAPIResponse(t, w, http.StatusUnauthorized, otaclient.CodeInvalidEnrollmentKey, "등록 키가 올바르지 않습니다.", nil)
 	}))
 	defer server.Close()
 
@@ -65,6 +115,7 @@ func TestClient_Register_InvalidEnrollmentKey(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, http.StatusUnauthorized, apiErr.StatusCode)
 	assert.Equal(t, otaclient.CodeInvalidEnrollmentKey, apiErr.Code)
+	assert.Equal(t, "등록 키가 올바르지 않습니다.", apiErr.Message)
 }
 
 // VEHICLE-REQ-001
@@ -80,8 +131,7 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 			assert.Equal(t, "cmp-1", body.LastUpdate.CampaignID)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(otaclient.CheckInResponse{
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.CheckInResponse{
 			UpdateTarget:       true,
 			CampaignID:         "cmp-2",
 			NextCheckInSeconds: 30,
@@ -112,8 +162,7 @@ func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Nil(t, body.LastUpdate)
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 30})
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 30})
 	}))
 	defer server.Close()
 
@@ -124,6 +173,7 @@ func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, resp.UpdateTarget)
+	assert.Equal(t, 30, resp.NextCheckInSeconds)
 }
 
 // VEHICLE-REQ-001
@@ -132,11 +182,12 @@ func TestClient_CheckIn_Errors(t *testing.T) {
 		name       string
 		statusCode int
 		code       string
-		wantCode   string
+		message    string
 	}{
-		{name: "401 UNAUTHORIZED", statusCode: http.StatusUnauthorized, code: otaclient.CodeUnauthorized, wantCode: otaclient.CodeUnauthorized},
-		{name: "403 VEHICLE_MISMATCH", statusCode: http.StatusForbidden, code: otaclient.CodeVehicleMismatch, wantCode: otaclient.CodeVehicleMismatch},
-		{name: "500 코드 없음", statusCode: http.StatusInternalServerError, code: "", wantCode: ""},
+		{name: "401 UNAUTHORIZED", statusCode: http.StatusUnauthorized, code: otaclient.CodeUnauthorized, message: "차량 토큰 인증에 실패했습니다."},
+		{name: "403 VEHICLE_MISMATCH", statusCode: http.StatusForbidden, code: otaclient.CodeVehicleMismatch, message: "토큰의 차량과 요청 경로의 차량이 다릅니다."},
+		{name: "500 INTERNAL_SERVER_ERROR", statusCode: http.StatusInternalServerError, code: "INTERNAL_SERVER_ERROR", message: "서버 내부 오류가 발생했습니다."},
+		{name: "500 코드 없음", statusCode: http.StatusInternalServerError},
 	}
 
 	for _, tt := range tests {
@@ -146,7 +197,7 @@ func TestClient_CheckIn_Errors(t *testing.T) {
 					w.WriteHeader(tt.statusCode)
 					return
 				}
-				writeJSONError(w, tt.statusCode, tt.code)
+				writeAPIResponse(t, w, tt.statusCode, tt.code, tt.message, nil)
 			}))
 			defer server.Close()
 
@@ -157,9 +208,33 @@ func TestClient_CheckIn_Errors(t *testing.T) {
 			var apiErr *otaclient.APIError
 			require.ErrorAs(t, err, &apiErr)
 			assert.Equal(t, tt.statusCode, apiErr.StatusCode)
-			assert.Equal(t, tt.wantCode, apiErr.Code)
+			assert.Equal(t, tt.code, apiErr.Code)
+			assert.Equal(t, tt.message, apiErr.Message)
 		})
 	}
+}
+
+// VEHICLE-REQ-001
+func TestClient_CheckIn_LimitsErrorMessage(t *testing.T) {
+	html := "<html>" + strings.Repeat("오류 ", 12_000) + "</html>"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	client := otaclient.New(server.URL, server.Client())
+	_, err := client.CheckIn(context.Background(), "car-0001", "vehicle-token", otaclient.CheckInRequest{CurrentVersion: "1.0.0"})
+
+	var apiErr *otaclient.APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Empty(t, apiErr.Code)
+	require.LessOrEqual(t, len(apiErr.Message), 512)
+	assert.True(t, strings.HasPrefix(apiErr.Message, "<html>"))
+	assert.True(t, strings.HasSuffix(apiErr.Message, "..."))
+	assert.True(t, utf8.ValidString(apiErr.Message))
 }
 
 // MANIFEST-REQ-001
@@ -171,8 +246,7 @@ func TestClient_GetManifest_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "Bearer vehicle-token", r.Header.Get("Authorization"))
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(otaclient.Manifest{
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{
 			CampaignID:    "cmp-1",
 			TargetVersion: "1.1.0",
 			FileSize:      1024,
@@ -200,8 +274,7 @@ func TestClient_GetManifest_EscapesPathParams(t *testing.T) {
 		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/cmp%2F1%3Fx=y/manifest", r.URL.EscapedPath())
 		assert.Empty(t, r.URL.RawQuery)
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(otaclient.Manifest{CampaignID: "cmp/1?x=y"})
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{CampaignID: "cmp/1?x=y"})
 	}))
 	defer server.Close()
 
@@ -217,16 +290,17 @@ func TestClient_GetManifest_Errors(t *testing.T) {
 		name       string
 		statusCode int
 		code       string
+		message    string
 	}{
-		{name: "404 CAMPAIGN_NOT_FOUND", statusCode: http.StatusNotFound, code: otaclient.CodeCampaignNotFound},
-		{name: "409 NOT_UPDATE_TARGET", statusCode: http.StatusConflict, code: otaclient.CodeNotUpdateTarget},
-		{name: "410 CAMPAIGN_INACTIVE", statusCode: http.StatusGone, code: otaclient.CodeCampaignInactive},
+		{name: "404 CAMPAIGN_NOT_FOUND", statusCode: http.StatusNotFound, code: otaclient.CodeCampaignNotFound, message: "캠페인을 찾을 수 없습니다."},
+		{name: "409 NOT_UPDATE_TARGET", statusCode: http.StatusConflict, code: otaclient.CodeNotUpdateTarget, message: "업데이트 대상 차량이 아닙니다."},
+		{name: "410 CAMPAIGN_INACTIVE", statusCode: http.StatusGone, code: otaclient.CodeCampaignInactive, message: "캠페인이 활성 상태가 아닙니다."},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				writeJSONError(w, tt.statusCode, tt.code)
+				writeAPIResponse(t, w, tt.statusCode, tt.code, tt.message, nil)
 			}))
 			defer server.Close()
 
@@ -238,6 +312,7 @@ func TestClient_GetManifest_Errors(t *testing.T) {
 			require.ErrorAs(t, err, &apiErr)
 			assert.Equal(t, tt.statusCode, apiErr.StatusCode)
 			assert.Equal(t, tt.code, apiErr.Code)
+			assert.Equal(t, tt.message, apiErr.Message)
 		})
 	}
 }

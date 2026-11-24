@@ -51,7 +51,7 @@ func TestRun_EndToEnd(t *testing.T) {
 
 	mux.HandleFunc("POST /api/v1/vehicles/register", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer "+enrollKey, r.Header.Get("Authorization"))
-		writeJSON(t, w, otaclient.RegisterResponse{VehicleToken: "tok-1"})
+		writeOTASuccess(t, w, http.StatusCreated, "CREATED", otaclient.RegisterResponse{VehicleToken: "tok-1"})
 	})
 
 	mux.HandleFunc("POST /api/v1/vehicles/"+vehicleID+"/check-in", func(w http.ResponseWriter, r *http.Request) {
@@ -64,23 +64,23 @@ func TestRun_EndToEnd(t *testing.T) {
 		case 1:
 			assert.Equal(t, "1.0.0", req.CurrentVersion)
 			assert.Nil(t, req.LastUpdate, "최초 체크인에는 보고할 이전 결과가 없어야 한다")
-			writeJSON(t, w, otaclient.CheckInResponse{UpdateTarget: true, CampaignID: campaignID, NextCheckInSeconds: 0})
+			writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.CheckInResponse{UpdateTarget: true, CampaignID: campaignID, NextCheckInSeconds: 0})
 		case 2:
 			assert.Equal(t, "1.1.0", req.CurrentVersion, "설치 후 체크인은 새 버전을 보고해야 한다")
 			if assert.NotNil(t, req.LastUpdate, "설치 결과는 다음 체크인에 보고되어야 한다") {
 				assert.Equal(t, campaignID, req.LastUpdate.CampaignID)
 				assert.Equal(t, "SUCCEEDED", req.LastUpdate.Result)
 			}
-			writeJSON(t, w, otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
+			writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
 			cancel()
 		default:
-			writeJSON(t, w, otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
+			writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
 		}
 	})
 
 	mux.HandleFunc("GET /api/v1/vehicles/"+vehicleID+"/campaigns/"+campaignID+"/manifest", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
-		writeJSON(t, w, otaclient.Manifest{
+		writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.Manifest{
 			CampaignID:    campaignID,
 			TargetVersion: "1.1.0",
 			FileSize:      int64(len(firmware)),
@@ -125,8 +125,15 @@ func TestHTTPClients_HaveTimeouts(t *testing.T) {
 	assert.Equal(t, cdnResponseHeaderTimeout, transport.ResponseHeaderTimeout)
 }
 
-func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
+func writeOTASuccess(t *testing.T, w http.ResponseWriter, statusCode int, code string, data any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	assert.NoError(t, json.NewEncoder(w).Encode(v))
+	w.WriteHeader(statusCode)
+	assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+		"isSuccess": true,
+		"code":      code,
+		"message":   "요청에 성공했습니다.",
+		"data":      data,
+		"error":     nil,
+	}))
 }

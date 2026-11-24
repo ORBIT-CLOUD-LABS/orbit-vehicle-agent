@@ -6,11 +6,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+)
+
+const (
+	maxResponseBodyBytes = 64 << 10
+	maxErrorMessageBytes = 512
 )
 
 // OTA 서버가 반환하는 오류 코드, APIError를 분류하는 데 사용됩니다.
@@ -60,10 +67,8 @@ type RegisterRequest struct {
 	CurrentVersion string `json:"currentVersion"`
 }
 
-// RegisterResponse는 차량 등록 응답 본문입니다. VehicleToken은 이 호출에서만 반환되며, 에이전트는 메모리에만 보관합니다.
-//
-// flow.md는 응답 본문 필드 이름을 정확히 지정하지 않고 한 번 토큰이 반환된다고만 명시합니다. VehicleToken은 나머지 API와 일치하는 camelCase를 가정합니다. OTA 서버가 존재하면 확인하십시오.
-
+// RegisterResponse는 차량 등록 성공 응답의 data입니다(orbit의 docs/api-spec.md §2.1).
+// 서버는 등록과 재등록 시 data.vehicleToken을 반환하고, 에이전트는 이를 메모리에만 보관합니다.
 type RegisterResponse struct {
 	VehicleToken string `json:"vehicleToken"`
 }
@@ -100,7 +105,7 @@ type CheckInResponse struct {
 }
 
 // CheckIn은 현재 버전과, 있다면 마지막 업데이트의 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
-// 호출자는 CodeUnauthorized를 "재등록 및 재시도"로, 500 응답(Code가 비어 있음)을 "다음 체크인 주기에 재시도"로 처리해야 합니다.
+// 호출자는 CodeUnauthorized를 받으면 재등록 후 재시도하고, HTTP 500을 받으면 다음 체크인 주기에 재시도해야 합니다.
 
 func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, req CheckInRequest) (CheckInResponse, error) {
 	var resp CheckInResponse
@@ -121,7 +126,7 @@ type Manifest struct {
 	URLExpiresAt  time.Time `json:"urlExpiresAt"`
 }
 
-// GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다. 
+// GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다.
 // 서버는 이 호출에서 대상 적격성을 다시 확인하므로, 호출자는 CodeNotUpdateTarget 및 CodeCampaignInactive를 "IDLE로 돌아가기"로 처리해야 하며 실패로 간주하지 않아야 합니다.
 
 func (c *Client) GetManifest(ctx context.Context, vehicleID, campaignID, vehicleToken string) (Manifest, error) {
@@ -158,7 +163,7 @@ func (c *Client) do(ctx context.Context, method, path, bearerToken string, body,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return fmt.Errorf("read response body: %w", err)
 	}
@@ -166,11 +171,25 @@ func (c *Client) do(ctx context.Context, method, path, bearerToken string, body,
 	if resp.StatusCode >= http.StatusBadRequest {
 		return parseAPIError(resp.StatusCode, respBody)
 	}
+	if len(respBody) > maxResponseBodyBytes {
+		return fmt.Errorf("ota response body exceeds %d bytes", maxResponseBodyBytes)
+	}
 
-	if out != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("decode response body: %w", err)
-		}
+	if out == nil {
+		return nil
+	}
+
+	var envelope struct {
+		Data *json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return fmt.Errorf("decode response envelope: %w", err)
+	}
+	if envelope.Data == nil {
+		return errors.New("ota server response is missing data")
+	}
+	if err := json.Unmarshal(*envelope.Data, out); err != nil {
+		return fmt.Errorf("decode response data: %w", err)
 	}
 	return nil
 }
@@ -182,8 +201,16 @@ type errorBody struct {
 
 func parseAPIError(statusCode int, body []byte) error {
 	var parsed errorBody
-	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Code == "" {
-		return &APIError{StatusCode: statusCode, Message: string(body)}
+	if len(body) <= maxResponseBodyBytes && json.Unmarshal(body, &parsed) == nil && parsed.Code != "" {
+		return &APIError{StatusCode: statusCode, Code: parsed.Code, Message: truncateErrorMessage(parsed.Message)}
 	}
-	return &APIError{StatusCode: statusCode, Code: parsed.Code, Message: parsed.Message}
+	return &APIError{StatusCode: statusCode, Message: truncateErrorMessage(string(body))}
+}
+
+func truncateErrorMessage(message string) string {
+	if len(message) <= maxErrorMessageBytes {
+		return message
+	}
+	const suffix = "..."
+	return strings.ToValidUTF8(message[:maxErrorMessageBytes-len(suffix)], "") + suffix
 }
