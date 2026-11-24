@@ -155,6 +155,8 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool) {
 
 type testSignatureVerifier func(string, string, firmwaresignature.Metadata) error
 
+func (testSignatureVerifier) HasKey(string) bool { return true }
+
 func (verify testSignatureVerifier) Verify(keyID, signature string, metadata firmwaresignature.Metadata) error {
 	return verify(keyID, signature, metadata)
 }

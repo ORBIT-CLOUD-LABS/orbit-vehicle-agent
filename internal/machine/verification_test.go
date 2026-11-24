@@ -89,48 +89,103 @@ func TestMachine_Run_InstallingRevalidatesFirmware(t *testing.T) {
 }
 
 func TestMachine_Run_SignatureRejectionSurvivesCheckInAndRestart(t *testing.T) {
-	dir := t.TempDir()
 	const campaignID int64 = 1
-	const unknownKeyID = "unknown-test-key"
-	for _, restart := range []bool{false, true} {
-		ctx, cancel := context.WithCancel(context.Background())
-		ota := &fakeOTA{
-			checkInResponses: []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: campaignID}},
-			manifestResponses: []otaclient.Manifest{{
-				CampaignID: campaignID, TargetVersion: "1.1.0", KeyID: unknownKeyID,
-				Edge: &otaclient.ManifestEdge{EdgeID: "edge-seoul"},
-			}},
-			onCheckIn: func(call int) {
-				if call == 2 {
-					cancel()
-				}
-			},
-		}
-		dl := &fakeDownloader{results: []downloader.Result{{Path: "firmware.bin"}}}
-		inst := &fakeInstaller{}
-		verifier, err := firmwaresignature.New()
-		require.NoError(t, err)
-		store := state.NewStore(dir, testIdentity.VehicleID)
-		m := machine.New(ota, dl, inst, store, verifier, nil, testIdentity, "enroll-key", fastCheckIn)
-		runErr := runMachine(t, m, ctx, "1.0.0")
-		cancel()
-		require.ErrorIs(t, runErr, context.Canceled)
+	const keyID = "rotated-test-key"
+	embedded, err := firmwaresignature.New()
+	require.NoError(t, err)
+	upgraded := &fakeSignatureVerifier{knownKeyID: keyID}
+	badSignature := errors.New("firmware signature verification failed")
 
-		assert.Empty(t, inst.calls)
-		require.Len(t, ota.checkInCalls, 3)
-		assert.Nil(t, ota.checkInCalls[2].LastUpdate)
-		if restart {
-			assert.Empty(t, ota.manifestCalls)
-			assert.Empty(t, dl.calls)
-			continue
-		}
-		assert.Equal(t, []int64{campaignID}, ota.manifestCalls)
-		assert.Equal(t, []int64{campaignID}, dl.calls)
-		update := ota.checkInCalls[1].LastUpdate
-		require.NotNil(t, update)
-		assert.Equal(t, "FAILED", update.Result)
-		assert.Equal(t, string(state.FailureSignatureInvalid), update.FailureReason)
-		assert.Equal(t, "unknown keyId: "+unknownKeyID, update.FailureDetail)
-		assert.Equal(t, "edge-seoul", update.EdgeID)
+	type boot struct {
+		verifier   machine.SignatureVerifier
+		wantResult state.Result
+		wantDetail string
+	}
+	tests := []struct {
+		name        string
+		legacyState bool
+		boots       []boot
+	}{
+		{
+			name: "unknown key is retried once the same key is available",
+			boots: []boot{
+				{verifier: embedded, wantResult: state.ResultFailed, wantDetail: "unknown keyId: " + keyID},
+				{verifier: embedded},
+				{verifier: &fakeSignatureVerifier{knownKeyID: "different-key"}},
+				{verifier: upgraded, wantResult: state.ResultSucceeded},
+			},
+		},
+		{
+			name: "invalid signature remains rejected after upgrade",
+			boots: []boot{
+				{verifier: &fakeSignatureVerifier{knownKeyID: keyID, err: badSignature}, wantResult: state.ResultFailed, wantDetail: badSignature.Error()},
+				{verifier: upgraded},
+			},
+		},
+		{
+			name:        "legacy rejection with no recorded reason is rechecked",
+			legacyState: true,
+			boots:       []boot{{verifier: upgraded, wantResult: state.ResultSucceeded}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.legacyState {
+				legacy := `{"vehicle_id":"v1","status":"IDLE","current_version":"1.0.0","signature_rejected_campaigns":[1]}`
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0o600))
+			}
+			for index, boot := range tt.boots {
+				t.Run(fmt.Sprintf("boot %d", index+1), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					ota := &fakeOTA{
+						checkInResponses: []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: campaignID}},
+						manifestResponses: []otaclient.Manifest{{
+							CampaignID: campaignID, TargetVersion: "1.1.0", KeyID: keyID,
+							Edge: &otaclient.ManifestEdge{EdgeID: "edge-seoul"},
+						}},
+						onCheckIn: func(call int) {
+							if call == 2 {
+								cancel()
+							}
+						},
+					}
+					if boot.wantResult == state.ResultSucceeded {
+						ota.checkInResponses = append(ota.checkInResponses, otaclient.CheckInResponse{})
+					}
+					dl := &fakeDownloader{results: []downloader.Result{{Path: "firmware.bin"}}}
+					inst := &fakeInstaller{}
+					store := state.NewStore(dir, testIdentity.VehicleID)
+					m := machine.New(ota, dl, inst, store, boot.verifier, nil, testIdentity, "enroll-key", fastCheckIn)
+					require.ErrorIs(t, runMachine(t, m, ctx, "1.0.0"), context.Canceled)
+
+					require.Len(t, ota.checkInCalls, 3)
+					assert.Nil(t, ota.checkInCalls[2].LastUpdate)
+					if boot.wantResult == "" {
+						assert.Empty(t, ota.manifestCalls)
+						assert.Empty(t, dl.calls)
+						assert.Empty(t, inst.calls)
+						return
+					}
+					assert.Equal(t, []int64{campaignID}, ota.manifestCalls)
+					assert.Equal(t, []int64{campaignID}, dl.calls)
+					update := ota.checkInCalls[1].LastUpdate
+					require.NotNil(t, update)
+					assert.Equal(t, string(boot.wantResult), update.Result)
+					assert.Equal(t, "edge-seoul", update.EdgeID)
+					if boot.wantResult == state.ResultSucceeded {
+						assert.Equal(t, []string{"firmware.bin"}, inst.calls)
+						saved, err := store.Load(context.Background(), "1.0.0")
+						require.NoError(t, err)
+						assert.Empty(t, saved.SignatureRejections)
+						return
+					}
+					assert.Empty(t, inst.calls)
+					assert.Equal(t, string(state.FailureSignatureInvalid), update.FailureReason)
+					assert.Equal(t, boot.wantDetail, update.FailureDetail)
+				})
+			}
+		})
 	}
 }

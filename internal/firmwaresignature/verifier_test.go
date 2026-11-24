@@ -20,6 +20,9 @@ func TestVerifier_Verify(t *testing.T) {
 	require.NoError(t, err)
 	verifier, err := newVerifier(keys)
 	require.NoError(t, err)
+	assert.True(t, verifier.HasKey("test-v1"))
+	assert.True(t, verifier.HasKey("test-v2"))
+	assert.False(t, verifier.HasKey("v3"))
 
 	const hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	const payload = "orbit-firmware-v1\nmodel-a\n1.0\n" + hash + "\n3"
@@ -63,6 +66,9 @@ func TestVerifier_Verify(t *testing.T) {
 				return
 			}
 			assert.ErrorContains(t, err, tt.wantErr)
+			if tt.keyID == "v3" {
+				assert.ErrorIs(t, err, ErrUnknownKey)
+			}
 		})
 	}
 }

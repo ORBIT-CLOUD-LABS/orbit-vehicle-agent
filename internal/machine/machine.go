@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
-	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -199,7 +199,8 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 // 실패는 결과로 기록하고 IDLE로 돌아간다. 일시적 실패는 상태를 바꾸지 않아
 // 다음 체크인 주기에 처음부터 다시 시도한다.
 func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
-	if slices.Contains(m.snap.SignatureRejectedCampaigns, campaignID) {
+	if rejection, rejected := m.snap.SignatureRejections[campaignID]; rejected &&
+		(rejection.MissingKeyID == "" || !m.verifier.HasKey(rejection.MissingKeyID)) {
 		return
 	}
 	manifest, outcome, err := m.fetchManifest(ctx, campaignID)
@@ -250,6 +251,10 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 	installing := m.snap
 	installing.Status = state.StatusInstalling
 	installing.PendingUpdate = pending
+	if _, rejected := installing.SignatureRejections[campaignID]; rejected {
+		installing.SignatureRejections = maps.Clone(installing.SignatureRejections)
+		delete(installing.SignatureRejections, campaignID)
+	}
 	if !m.save(ctx, installing) {
 		return
 	}
@@ -406,6 +411,10 @@ func (m *Machine) fetchManifest(ctx context.Context, campaignID int64) (otaclien
 // recordFailure는 실패한 업데이트 결과를 저장하고 IDLE로 돌아가, 다음
 // 체크인에서 실패를 보고할 수 있게 한다.
 func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID string, reason state.FailureReason, detail string) {
+	m.save(ctx, m.failedUpdate(campaignID, edgeID, reason, detail))
+}
+
+func (m *Machine) failedUpdate(campaignID int64, edgeID string, reason state.FailureReason, detail string) state.Snapshot {
 	next := m.snap
 	next.Status = state.StatusIdle
 	next.PendingUpdate = nil
@@ -417,10 +426,7 @@ func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID st
 		EdgeID:        edgeID,
 		FinishedAt:    time.Now(),
 	}
-	if reason == state.FailureSignatureInvalid && !slices.Contains(next.SignatureRejectedCampaigns, campaignID) {
-		next.SignatureRejectedCampaigns = append(slices.Clone(next.SignatureRejectedCampaigns), campaignID)
-	}
-	m.save(ctx, next)
+	return next
 }
 
 // recordSuccess는 성공한 업데이트 결과를 저장하고 새 버전의 IDLE로 돌아가,

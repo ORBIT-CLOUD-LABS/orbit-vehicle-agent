@@ -15,6 +15,9 @@ import (
 //go:embed public_keys.json
 var embeddedPublicKeys []byte
 
+// ErrUnknownKey는 검증기에 요청한 keyId가 내장되어 있지 않음을 나타낸다.
+var ErrUnknownKey = errors.New("unknown keyId")
+
 // Metadata는 서명 대상인 차종, 대상 버전과 실제 펌웨어의 해시·크기다.
 type Metadata struct {
 	Model   string
@@ -56,6 +59,12 @@ func newVerifier(data []byte) (*Verifier, error) {
 	return &Verifier{publicKeys: publicKeys}, nil
 }
 
+// HasKey는 keyID에 해당하는 공개 키가 내장되어 있는지 반환한다.
+func (v *Verifier) HasKey(keyID string) bool {
+	_, ok := v.publicKeys[keyID]
+	return ok
+}
+
 // Verify는 매니페스트의 keyId에 해당하는 키로 Base64 서명을 검증한다.
 func (v *Verifier) Verify(keyID, signature string, metadata Metadata) error {
 	if keyID == "" {
@@ -63,7 +72,7 @@ func (v *Verifier) Verify(keyID, signature string, metadata Metadata) error {
 	}
 	key, ok := v.publicKeys[keyID]
 	if !ok {
-		return fmt.Errorf("unknown keyId: %s", keyID)
+		return fmt.Errorf("%w: %s", ErrUnknownKey, keyID)
 	}
 
 	decoded, err := base64.StdEncoding.Strict().DecodeString(signature)

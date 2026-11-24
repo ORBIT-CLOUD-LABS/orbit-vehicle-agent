@@ -101,8 +101,13 @@ type signatureCall struct {
 }
 
 type fakeSignatureVerifier struct {
-	err   error
-	calls []signatureCall
+	err        error
+	calls      []signatureCall
+	knownKeyID string
+}
+
+func (f *fakeSignatureVerifier) HasKey(keyID string) bool {
+	return keyID != "" && keyID == f.knownKeyID
 }
 
 func (f *fakeSignatureVerifier) Verify(keyID, signature string, metadata firmwaresignature.Metadata) error {

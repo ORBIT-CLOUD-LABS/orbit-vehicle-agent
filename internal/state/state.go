@@ -67,14 +67,20 @@ type LastUpdate struct {
 	FinishedAt    time.Time     `json:"finished_at"`
 }
 
+// SignatureRejection은 캠페인의 서명 검증 실패를 기록한다.
+// MissingKeyID가 비어 있으면 해당 캠페인은 다시 시도하지 않는다.
+type SignatureRejection struct {
+	MissingKeyID string `json:"missing_key_id,omitempty"`
+}
+
 // Snapshot은 차량 에이전트의 지속적인 수명 주기 상태입니다.
 type Snapshot struct {
-	VehicleID                  string         `json:"vehicle_id"`
-	Status                     Status         `json:"status"`
-	CurrentVersion             string         `json:"current_version"`
-	PendingUpdate              *PendingUpdate `json:"pending_update,omitempty"`
-	LastUpdate                 *LastUpdate    `json:"last_update,omitempty"`
-	SignatureRejectedCampaigns []int64        `json:"signature_rejected_campaigns,omitempty"`
+	VehicleID           string                       `json:"vehicle_id"`
+	Status              Status                       `json:"status"`
+	CurrentVersion      string                       `json:"current_version"`
+	PendingUpdate       *PendingUpdate               `json:"pending_update,omitempty"`
+	LastUpdate          *LastUpdate                  `json:"last_update,omitempty"`
+	SignatureRejections map[int64]SignatureRejection `json:"signature_rejections,omitempty"`
 }
 
 // Store는 단일 차량의 Snapshot을 DATA_DIR/state.json에서 읽고 씁니다.
