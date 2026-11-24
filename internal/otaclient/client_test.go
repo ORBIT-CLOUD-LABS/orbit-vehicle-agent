@@ -155,6 +155,50 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 }
 
 // VEHICLE-REQ-001
+func TestClient_CheckIn_LastUpdateEdgeID(t *testing.T) {
+	tests := []struct {
+		name   string
+		edgeID string
+	}{
+		{name: "실제로 받은 Edge를 전송", edgeID: "edge-daejeon"},
+		{name: "Edge를 모르면 필드를 생략"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					LastUpdate map[string]json.RawMessage `json:"lastUpdate"`
+				}
+				if assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) && assert.NotNil(t, body.LastUpdate) {
+					if tt.edgeID == "" {
+						assert.NotContains(t, body.LastUpdate, "edgeId")
+					} else {
+						assert.Equal(t, `"`+tt.edgeID+`"`, string(body.LastUpdate["edgeId"]))
+					}
+				}
+
+				writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.CheckInResponse{NextCheckInSeconds: 30})
+			}))
+			defer server.Close()
+
+			client := otaclient.New(server.URL, server.Client())
+			_, err := client.CheckIn(context.Background(), "car-0001", "vehicle-token", otaclient.CheckInRequest{
+				CurrentVersion: "1.1.0",
+				LastUpdate: &otaclient.LastUpdate{
+					CampaignID: 1,
+					Result:     "SUCCEEDED",
+					EdgeID:     tt.edgeID,
+					FinishedAt: time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC),
+				},
+			})
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+// VEHICLE-REQ-001
 func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body otaclient.CheckInRequest

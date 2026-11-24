@@ -223,18 +223,23 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 			m.logger.Warn("refresh manifest failed, retrying next cycle", zap.Error(dlErr))
 			return
 		}
-		reason, detail := classifyDownloadFailure(dlErr)
-		m.recordFailure(ctx, manifest.CampaignID, reason, detail)
+		m.recordFailure(ctx, manifest.CampaignID, result.edgeID, downloadFailureReason(dlErr), dlErr.Error())
 		return
 	}
 
+	pending := &state.PendingUpdate{
+		CampaignID:    manifest.CampaignID,
+		TargetVersion: manifest.TargetVersion,
+		EdgeID:        result.edgeID,
+	}
 	installing := m.snap
 	installing.Status = state.StatusInstalling
+	installing.PendingUpdate = pending
 	if !m.save(ctx, installing) {
 		return
 	}
 
-	m.finishInstall(ctx, manifest.CampaignID, manifest.TargetVersion, result.Path)
+	m.finishInstall(ctx, pending, result.path)
 }
 
 // resumeInstall은 다운로드를 마친 뒤 설치 중에 재시작으로 중단된 업데이트의
@@ -242,22 +247,21 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 func (m *Machine) resumeInstall(ctx context.Context) {
 	pending := m.snap.PendingUpdate
 	sourcePath := m.downloader.Path(pending.CampaignID)
-	m.finishInstall(ctx, pending.CampaignID, pending.TargetVersion, sourcePath)
+	m.finishInstall(ctx, pending, sourcePath)
 }
 
-func (m *Machine) finishInstall(ctx context.Context, campaignID int64, targetVersion, sourcePath string) {
+func (m *Machine) finishInstall(ctx context.Context, pending *state.PendingUpdate, sourcePath string) {
 	_, err := m.installer.Install(ctx, sourcePath)
 	if err != nil {
 		reason, detail := classifyInstallFailure(err)
-		m.recordFailure(ctx, campaignID, reason, detail)
+		m.recordFailure(ctx, pending.CampaignID, pending.EdgeID, reason, detail)
 		return
 	}
-	m.recordSuccess(ctx, campaignID, targetVersion)
+	m.recordSuccess(ctx, pending)
 }
 
 // errAbortManifestNotTarget과 errAbortManifestError는 downloadWithManifestRetry가
-// downloader.Download와 같은 시그니처의 에러 반환값 하나로 매니페스트 재요청
-// 결과를 알리게 해 준다.
+// 매니페스트 재요청 결과를 에러 반환값으로 알리게 해 준다.
 var (
 	errAbortManifestNotTarget = errors.New("manifest refresh: no longer an update target")
 	errAbortManifestError     = errors.New("manifest refresh failed")
@@ -265,11 +269,16 @@ var (
 	errDownloadURLsExpired    = errors.New("download URLs expired")
 )
 
+type edgeDownloadResult struct {
+	path   string
+	edgeID string
+}
+
 // downloadWithManifestRetry는 URL이 만료됐거나 Edge에서 거부됐거나 모든
 // Edge가 실패하면 매니페스트를 한 번 새로 받아 새 Edge 목록으로 시도한다.
 // 호출자가 갱신된 CampaignID/TargetVersion을 사용할 수 있게 *manifest를
 // 새 매니페스트로 덮어쓴다.
-func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
+func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otaclient.Manifest) (edgeDownloadResult, error) {
 	result, err := m.downloadFromEdges(ctx, manifest)
 	if !errors.Is(err, errDownloadURLsExpired) &&
 		!errors.Is(err, downloader.ErrManifestExpired) &&
@@ -280,35 +289,46 @@ func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otacl
 	fresh, outcome, mErr := m.fetchManifest(ctx, manifest.CampaignID)
 	switch outcome {
 	case manifestNotTarget:
-		return downloader.Result{}, errAbortManifestNotTarget
+		return edgeDownloadResult{}, errAbortManifestNotTarget
 	case manifestError:
-		return downloader.Result{}, fmt.Errorf("%w: %w", errAbortManifestError, mErr)
+		return edgeDownloadResult{}, fmt.Errorf("%w: %w", errAbortManifestError, mErr)
 	}
 	*manifest = fresh
 
 	return m.downloadFromEdges(ctx, manifest)
 }
 
-func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
+func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Manifest) (edgeDownloadResult, error) {
 	if expiresAt := manifest.URLExpiresAt; !expiresAt.IsZero() && !time.Now().Before(expiresAt) {
-		return downloader.Result{}, errDownloadURLsExpired
+		return edgeDownloadResult{}, errDownloadURLsExpired
 	}
 
-	urls := make([]string, 0, 1+len(manifest.FallbackURLs))
-	urls = append(urls, manifest.DownloadURL)
+	type edgeDownload struct {
+		url    string
+		edgeID string
+	}
+	edges := make([]edgeDownload, 1, 1+len(manifest.FallbackURLs))
+	edges[0].url = manifest.DownloadURL
+	if manifest.Edge != nil {
+		edges[0].edgeID = manifest.Edge.EdgeID
+	}
 	for _, fallback := range manifest.FallbackURLs {
-		urls = append(urls, fallback.URL)
+		edges = append(edges, edgeDownload{url: fallback.URL, edgeID: fallback.EdgeID})
 	}
 
 	var lastErr error
-	for _, url := range urls {
-		result, err := m.downloadFromEdge(ctx, manifest, url)
-		if err == nil || ctx.Err() != nil || !canSwitchEdge(err) {
-			return result, err
+	for _, edge := range edges {
+		result, err := m.downloadFromEdge(ctx, manifest, edge.url)
+		// 해시가 달라도 이 Edge에서 파일을 받은 사실은 보고한다.
+		if err == nil || downloadFailureReason(err) == state.FailureHashMismatch {
+			return edgeDownloadResult{path: result.Path, edgeID: edge.edgeID}, err
+		}
+		if ctx.Err() != nil || !canSwitchEdge(err) {
+			return edgeDownloadResult{}, err
 		}
 		lastErr = err
 	}
-	return downloader.Result{}, fmt.Errorf("%w: %w", errAllEdgesFailed, lastErr)
+	return edgeDownloadResult{}, fmt.Errorf("%w: %w", errAllEdgesFailed, lastErr)
 }
 
 func (m *Machine) downloadFromEdge(ctx context.Context, manifest *otaclient.Manifest, url string) (downloader.Result, error) {
@@ -378,7 +398,7 @@ func (m *Machine) fetchManifest(ctx context.Context, campaignID int64) (otaclien
 
 // recordFailure는 실패한 업데이트 결과를 저장하고 IDLE로 돌아가, 다음
 // 체크인에서 실패를 보고할 수 있게 한다.
-func (m *Machine) recordFailure(ctx context.Context, campaignID int64, reason state.FailureReason, detail string) {
+func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID string, reason state.FailureReason, detail string) {
 	next := state.Snapshot{
 		VehicleID:      m.snap.VehicleID,
 		Status:         state.StatusIdle,
@@ -388,6 +408,7 @@ func (m *Machine) recordFailure(ctx context.Context, campaignID int64, reason st
 			Result:        state.ResultFailed,
 			FailureReason: reason,
 			FailureDetail: detail,
+			EdgeID:        edgeID,
 			FinishedAt:    time.Now(),
 		},
 	}
@@ -396,14 +417,15 @@ func (m *Machine) recordFailure(ctx context.Context, campaignID int64, reason st
 
 // recordSuccess는 성공한 업데이트 결과를 저장하고 새 버전의 IDLE로 돌아가,
 // 다음 체크인에서 성공을 보고할 수 있게 한다.
-func (m *Machine) recordSuccess(ctx context.Context, campaignID int64, targetVersion string) {
+func (m *Machine) recordSuccess(ctx context.Context, pending *state.PendingUpdate) {
 	next := state.Snapshot{
 		VehicleID:      m.snap.VehicleID,
 		Status:         state.StatusIdle,
-		CurrentVersion: targetVersion,
+		CurrentVersion: pending.TargetVersion,
 		LastUpdate: &state.LastUpdate{
-			CampaignID: campaignID,
+			CampaignID: pending.CampaignID,
 			Result:     state.ResultSucceeded,
+			EdgeID:     pending.EdgeID,
 			FinishedAt: time.Now(),
 		},
 	}
@@ -496,18 +518,18 @@ func toAPILastUpdate(last *state.LastUpdate) *otaclient.LastUpdate {
 		Result:        string(last.Result),
 		FailureReason: string(last.FailureReason),
 		FailureDetail: last.FailureDetail,
+		EdgeID:        last.EdgeID,
 		FinishedAt:    last.FinishedAt,
 	}
 }
 
-// classifyDownloadFailure는 다운로더 실패를 에이전트의 실패 사유(flow.md ④의
-// 표)와 사람이 읽을 상세 내용으로 바꾼다.
-func classifyDownloadFailure(err error) (state.FailureReason, string) {
+// downloadFailureReason은 다운로더 에러를 체크인에 보고할 실패 사유로 바꾼다.
+func downloadFailureReason(err error) state.FailureReason {
 	var dlErr *downloader.Error
 	if errors.As(err, &dlErr) && dlErr.Reason == downloader.FailureHashMismatch {
-		return state.FailureHashMismatch, dlErr.Error()
+		return state.FailureHashMismatch
 	}
-	return state.FailureDownloadFailed, err.Error()
+	return state.FailureDownloadFailed
 }
 
 // classifyInstallFailure는 설치기 실패를 에이전트의 실패 사유(flow.md ④의

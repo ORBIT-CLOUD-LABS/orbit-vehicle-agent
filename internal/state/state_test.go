@@ -47,6 +47,7 @@ func TestStore_SaveThenLoad_RoundTrips(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"campaign_id": 1`)
+	assert.NotContains(t, string(data), `"edge_id"`)
 
 	got, err := store.Load(ctx, "1.0.0")
 
@@ -82,6 +83,7 @@ func TestStore_SaveThenLoad_WithLastUpdate(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(dir, "state.json"))
 			require.NoError(t, err)
 			assert.Contains(t, string(data), `"campaign_id": 1`)
+			assert.NotContains(t, string(data), `"edge_id"`)
 
 			got, err := store.Load(ctx, "1.0.0")
 
@@ -89,6 +91,38 @@ func TestStore_SaveThenLoad_WithLastUpdate(t *testing.T) {
 			assert.Equal(t, want, got)
 		})
 	}
+}
+
+func TestStore_SaveThenLoad_EdgeIDs(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	want := state.Snapshot{
+		VehicleID:      "car-0001",
+		Status:         state.StatusInstalling,
+		CurrentVersion: "1.1.0",
+		PendingUpdate: &state.PendingUpdate{
+			CampaignID:    2,
+			TargetVersion: "1.2.0",
+			EdgeID:        "edge-daejeon",
+		},
+		LastUpdate: &state.LastUpdate{
+			CampaignID: 1,
+			Result:     state.ResultSucceeded,
+			EdgeID:     "edge-seoul",
+			FinishedAt: time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	require.NoError(t, state.NewStore(dir, "car-0001").Save(ctx, want))
+	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"edge_id": "edge-daejeon"`)
+	assert.Contains(t, string(data), `"edge_id": "edge-seoul"`)
+
+	got, err := state.NewStore(dir, "car-0001").Load(ctx, "1.1.0")
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }
 
 // UPDATE-REQ-001

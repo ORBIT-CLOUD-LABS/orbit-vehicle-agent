@@ -88,6 +88,7 @@ type LastUpdate struct {
 	Result        string    `json:"result"`
 	FailureReason string    `json:"failureReason,omitempty"`
 	FailureDetail string    `json:"failureDetail,omitempty"`
+	EdgeID        string    `json:"edgeId,omitempty"`
 	FinishedAt    time.Time `json:"finishedAt"`
 }
 

@@ -37,6 +37,8 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 		wantPaths        []string
 		wantManifests    int
 		wantResult       state.Result
+		installErr       error
+		hashMismatch     bool
 	}{
 		{
 			name: "유효한 URL은 바로 요청", edgeStatuses: [][]int{{http.StatusOK}},
@@ -74,6 +76,14 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 		{
 			name: "연결 실패 후 즉시 전환", edgeStatuses: [][]int{nil, {http.StatusOK}},
 			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultSucceeded,
+		},
+		{
+			name: "대체 Edge에서 받은 뒤 설치 실패에도 Edge를 보고", edgeStatuses: [][]int{nil, {http.StatusOK}},
+			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultFailed, installErr: errBoom,
+		},
+		{
+			name: "해시 불일치에도 파일을 받은 대체 Edge를 보고", edgeStatuses: [][]int{nil, {http.StatusOK}, {http.StatusOK}},
+			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultFailed, hashMismatch: true,
 		},
 		{
 			name: "타임아웃 후 즉시 전환", edgeStatuses: [][]int{{timeout}, {http.StatusOK}},
@@ -158,22 +168,31 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 				FileSize: int64(len(firmware)), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(firmware))),
 				DownloadURL:  urls[0] + "/old",
 				URLExpiresAt: tt.initialExpiresAt,
+				Edge:         &otaclient.ManifestEdge{EdgeID: "edge-0"},
+			}
+			if tt.hashMismatch {
+				manifest.SHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte("different-firmware")))
 			}
 			oldURLs := urls
 			if len(tt.freshEdges) > 0 {
 				oldURLs = urls[:2]
 			}
-			for _, url := range oldURLs[1:] {
-				manifest.FallbackURLs = append(manifest.FallbackURLs, otaclient.FallbackURL{URL: url + "/old-fallback"})
+			for i, url := range oldURLs[1:] {
+				manifest.FallbackURLs = append(manifest.FallbackURLs, otaclient.FallbackURL{
+					URL: url + "/old-fallback", EdgeID: fmt.Sprintf("edge-%d", i+1),
+				})
 			}
 			fresh := manifest
 			fresh.DownloadURL = urls[0] + "/new"
 			fresh.URLExpiresAt = tt.freshExpiresAt
 			if len(tt.freshEdges) > 0 {
 				fresh.DownloadURL = urls[tt.freshEdges[0]] + "/new"
+				fresh.Edge = &otaclient.ManifestEdge{EdgeID: fmt.Sprintf("edge-%d", tt.freshEdges[0])}
 				fresh.FallbackURLs = nil
 				for _, edge := range tt.freshEdges[1:] {
-					fresh.FallbackURLs = append(fresh.FallbackURLs, otaclient.FallbackURL{URL: urls[edge] + "/new-fallback"})
+					fresh.FallbackURLs = append(fresh.FallbackURLs, otaclient.FallbackURL{
+						URL: urls[edge] + "/new-fallback", EdgeID: fmt.Sprintf("edge-%d", edge),
+					})
 				}
 			}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -189,7 +208,8 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 				},
 			}
 			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-			m := machine.New(ota, downloader.New(t.TempDir(), client), &fakeInstaller{}, store, nil, testIdentity, "enroll-key", fastCheckIn)
+			inst := &fakeInstaller{errs: []error{tt.installErr}}
+			m := machine.New(ota, downloader.New(t.TempDir(), client), inst, store, nil, testIdentity, "enroll-key", fastCheckIn)
 
 			require.ErrorIs(t, runMachine(t, m, ctx, "1.0.0"), context.Canceled)
 
@@ -202,9 +222,27 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			update := ota.checkInCalls[1].LastUpdate
 			require.NotNil(t, update)
 			assert.Equal(t, string(tt.wantResult), update.Result)
-			if tt.wantResult == state.ResultFailed {
-				assert.Equal(t, string(state.FailureDownloadFailed), update.FailureReason)
+			if tt.hashMismatch {
+				assert.Equal(t, string(state.FailureHashMismatch), update.FailureReason)
+				assert.Equal(t, "edge-1", update.EdgeID)
+				assert.Empty(t, inst.calls)
+				return
 			}
+			if tt.installErr != nil {
+				assert.Equal(t, string(state.FailureInstallFailed), update.FailureReason)
+			} else if tt.wantResult == state.ResultFailed {
+				assert.Equal(t, string(state.FailureDownloadFailed), update.FailureReason)
+				assert.Empty(t, update.EdgeID)
+				assert.Empty(t, inst.calls)
+				return
+			}
+			wantEdgeID := fmt.Sprintf("edge-%d", tt.wantRequests[len(tt.wantRequests)-1])
+			assert.Equal(t, wantEdgeID, update.EdgeID)
+			require.GreaterOrEqual(t, len(store.saves), 2)
+			installing := store.saves[1]
+			assert.Equal(t, state.StatusInstalling, installing.Status)
+			require.NotNil(t, installing.PendingUpdate)
+			assert.Equal(t, wantEdgeID, installing.PendingUpdate.EdgeID)
 		})
 	}
 }
