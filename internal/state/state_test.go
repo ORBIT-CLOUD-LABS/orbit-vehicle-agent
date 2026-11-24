@@ -56,31 +56,39 @@ func TestStore_SaveThenLoad_RoundTrips(t *testing.T) {
 
 // UPDATE-REQ-001
 func TestStore_SaveThenLoad_WithLastUpdate(t *testing.T) {
-	dir := t.TempDir()
-	store := state.NewStore(dir, "car-0001")
-	ctx := context.Background()
+	for _, reason := range []state.FailureReason{
+		state.FailureHashMismatch,
+		"SIGNATURE_INVALID",
+		"DOWNGRADE_REJECTED",
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			dir := t.TempDir()
+			store := state.NewStore(dir, "car-0001")
+			ctx := context.Background()
 
-	want := state.Snapshot{
-		VehicleID:      "car-0001",
-		Status:         state.StatusIdle,
-		CurrentVersion: "1.0.0",
-		LastUpdate: &state.LastUpdate{
-			CampaignID:    1,
-			Result:        state.ResultFailed,
-			FailureReason: state.FailureHashMismatch,
-			FailureDetail: "sha256 mismatch",
-			FinishedAt:    time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC),
-		},
+			want := state.Snapshot{
+				VehicleID:      "car-0001",
+				Status:         state.StatusIdle,
+				CurrentVersion: "1.0.0",
+				LastUpdate: &state.LastUpdate{
+					CampaignID:    1,
+					Result:        state.ResultFailed,
+					FailureReason: reason,
+					FailureDetail: "update verification failed",
+					FinishedAt:    time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC),
+				},
+			}
+			require.NoError(t, store.Save(ctx, want))
+			data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			require.NoError(t, err)
+			assert.Contains(t, string(data), `"campaign_id": 1`)
+
+			got, err := store.Load(ctx, "1.0.0")
+
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
 	}
-	require.NoError(t, store.Save(ctx, want))
-	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"campaign_id": 1`)
-
-	got, err := store.Load(ctx, "1.0.0")
-
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
 }
 
 // UPDATE-REQ-001

@@ -34,9 +34,11 @@ const (
 type FailureReason string
 
 const (
-	FailureDownloadFailed FailureReason = "DOWNLOAD_FAILED"
-	FailureHashMismatch   FailureReason = "HASH_MISMATCH"
-	FailureInstallFailed  FailureReason = "INSTALL_FAILED"
+	FailureDownloadFailed    FailureReason = "DOWNLOAD_FAILED"
+	FailureHashMismatch      FailureReason = "HASH_MISMATCH"
+	FailureInstallFailed     FailureReason = "INSTALL_FAILED"
+	FailureSignatureInvalid  FailureReason = "SIGNATURE_INVALID"
+	FailureDowngradeRejected FailureReason = "DOWNGRADE_REJECTED"
 )
 
 // PendingUpdate는 다운로드 또는 설치 중인 캠페인을 식별합니다.
@@ -209,9 +211,10 @@ func validateLastUpdate(last *LastUpdate) error {
 		}
 	case ResultFailed:
 		switch last.FailureReason {
-		case FailureDownloadFailed, FailureHashMismatch, FailureInstallFailed:
+		case FailureDownloadFailed, FailureHashMismatch, FailureInstallFailed, FailureSignatureInvalid, FailureDowngradeRejected:
 		default:
-			return fmt.Errorf("last_update.failure_reason %q: must be one of %s, %s, %s", last.FailureReason, FailureDownloadFailed, FailureHashMismatch, FailureInstallFailed)
+			return fmt.Errorf("last_update.failure_reason %q: must be one of %s, %s, %s, %s, %s",
+				last.FailureReason, FailureDownloadFailed, FailureHashMismatch, FailureInstallFailed, FailureSignatureInvalid, FailureDowngradeRejected)
 		}
 	default:
 		return fmt.Errorf("last_update.result %q: must be %s or %s", last.Result, ResultSucceeded, ResultFailed)
