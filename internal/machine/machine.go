@@ -223,8 +223,7 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 			m.logger.Warn("refresh manifest failed, retrying next cycle", zap.Error(dlErr))
 			return
 		}
-		reason, detail := classifyDownloadFailure(dlErr)
-		m.recordFailure(ctx, manifest.CampaignID, "", reason, detail)
+		m.recordFailure(ctx, manifest.CampaignID, result.edgeID, downloadFailureReason(dlErr), dlErr.Error())
 		return
 	}
 
@@ -320,8 +319,9 @@ func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Man
 	var lastErr error
 	for _, edge := range edges {
 		result, err := m.downloadFromEdge(ctx, manifest, edge.url)
-		if err == nil {
-			return edgeDownloadResult{path: result.Path, edgeID: edge.edgeID}, nil
+		// 해시가 달라도 이 Edge에서 파일을 받은 사실은 보고한다.
+		if err == nil || downloadFailureReason(err) == state.FailureHashMismatch {
+			return edgeDownloadResult{path: result.Path, edgeID: edge.edgeID}, err
 		}
 		if ctx.Err() != nil || !canSwitchEdge(err) {
 			return edgeDownloadResult{}, err
@@ -523,14 +523,13 @@ func toAPILastUpdate(last *state.LastUpdate) *otaclient.LastUpdate {
 	}
 }
 
-// classifyDownloadFailure는 다운로더 실패를 에이전트의 실패 사유(flow.md ④의
-// 표)와 사람이 읽을 상세 내용으로 바꾼다.
-func classifyDownloadFailure(err error) (state.FailureReason, string) {
+// downloadFailureReason은 다운로더 에러를 체크인에 보고할 실패 사유로 바꾼다.
+func downloadFailureReason(err error) state.FailureReason {
 	var dlErr *downloader.Error
 	if errors.As(err, &dlErr) && dlErr.Reason == downloader.FailureHashMismatch {
-		return state.FailureHashMismatch, dlErr.Error()
+		return state.FailureHashMismatch
 	}
-	return state.FailureDownloadFailed, err.Error()
+	return state.FailureDownloadFailed
 }
 
 // classifyInstallFailure는 설치기 실패를 에이전트의 실패 사유(flow.md ④의

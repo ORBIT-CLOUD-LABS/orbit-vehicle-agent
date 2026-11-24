@@ -38,6 +38,7 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 		wantManifests    int
 		wantResult       state.Result
 		installErr       error
+		hashMismatch     bool
 	}{
 		{
 			name: "유효한 URL은 바로 요청", edgeStatuses: [][]int{{http.StatusOK}},
@@ -79,6 +80,10 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 		{
 			name: "대체 Edge에서 받은 뒤 설치 실패에도 Edge를 보고", edgeStatuses: [][]int{nil, {http.StatusOK}},
 			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultFailed, installErr: errBoom,
+		},
+		{
+			name: "해시 불일치에도 파일을 받은 대체 Edge를 보고", edgeStatuses: [][]int{nil, {http.StatusOK}, {http.StatusOK}},
+			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultFailed, hashMismatch: true,
 		},
 		{
 			name: "타임아웃 후 즉시 전환", edgeStatuses: [][]int{{timeout}, {http.StatusOK}},
@@ -165,6 +170,9 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 				URLExpiresAt: tt.initialExpiresAt,
 				Edge:         &otaclient.ManifestEdge{EdgeID: "edge-0"},
 			}
+			if tt.hashMismatch {
+				manifest.SHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte("different-firmware")))
+			}
 			oldURLs := urls
 			if len(tt.freshEdges) > 0 {
 				oldURLs = urls[:2]
@@ -214,6 +222,12 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			update := ota.checkInCalls[1].LastUpdate
 			require.NotNil(t, update)
 			assert.Equal(t, string(tt.wantResult), update.Result)
+			if tt.hashMismatch {
+				assert.Equal(t, string(state.FailureHashMismatch), update.FailureReason)
+				assert.Equal(t, "edge-1", update.EdgeID)
+				assert.Empty(t, inst.calls)
+				return
+			}
 			if tt.installErr != nil {
 				assert.Equal(t, string(state.FailureInstallFailed), update.FailureReason)
 			} else if tt.wantResult == state.ResultFailed {
