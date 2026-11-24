@@ -43,9 +43,18 @@ const (
 
 // PendingUpdate는 다운로드 또는 설치 중인 캠페인을 식별합니다.
 type PendingUpdate struct {
-	CampaignID    int64  `json:"campaign_id"`
-	TargetVersion string `json:"target_version"`
-	EdgeID        string `json:"edge_id,omitempty"`
+	CampaignID    int64                 `json:"campaign_id"`
+	TargetVersion string                `json:"target_version"`
+	EdgeID        string                `json:"edge_id,omitempty"`
+	Verification  *FirmwareVerification `json:"verification,omitempty"`
+}
+
+// FirmwareVerification은 설치를 재개할 때 다시 검증할 펌웨어의 정보다.
+type FirmwareVerification struct {
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	Signature string `json:"signature"`
+	KeyID     string `json:"key_id"`
 }
 
 // LastUpdate는 가장 최근의 업데이트 결과이며, 다음 체크인에서 보고되고 서버가 확인하면 지워집니다.
@@ -60,11 +69,12 @@ type LastUpdate struct {
 
 // Snapshot은 차량 에이전트의 지속적인 수명 주기 상태입니다.
 type Snapshot struct {
-	VehicleID      string         `json:"vehicle_id"`
-	Status         Status         `json:"status"`
-	CurrentVersion string         `json:"current_version"`
-	PendingUpdate  *PendingUpdate `json:"pending_update,omitempty"`
-	LastUpdate     *LastUpdate    `json:"last_update,omitempty"`
+	VehicleID                  string         `json:"vehicle_id"`
+	Status                     Status         `json:"status"`
+	CurrentVersion             string         `json:"current_version"`
+	PendingUpdate              *PendingUpdate `json:"pending_update,omitempty"`
+	LastUpdate                 *LastUpdate    `json:"last_update,omitempty"`
+	SignatureRejectedCampaigns []int64        `json:"signature_rejected_campaigns,omitempty"`
 }
 
 // Store는 단일 차량의 Snapshot을 DATA_DIR/state.json에서 읽고 씁니다.

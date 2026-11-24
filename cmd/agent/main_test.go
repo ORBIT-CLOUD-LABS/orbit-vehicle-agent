@@ -10,14 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 )
 
@@ -27,11 +30,19 @@ import (
 // 알려 주는 체크인(④), 매니페스트 조회(⑤), 펌웨어 다운로드·검증(⑥),
 // 설치(⑦), 다음 체크인의 결과 보고(④). 서버가 결과를 확인하면 루프를 멈춘다.
 func TestRun_EndToEnd(t *testing.T) {
+	t.Run("verified firmware installs", func(t *testing.T) { testRunEndToEnd(t, true) })
+	t.Run("unknown key fails with embedded verifier", func(t *testing.T) { testRunEndToEnd(t, false) })
+}
+
+func testRunEndToEnd(t *testing.T, acceptsSignature bool) {
+	t.Helper()
 	const (
 		vehicleID        = "car-0001"
 		enrollKey        = "enrollment-secret"
 		campaignID int64 = 7
 		firmware         = "verified-firmware-bytes"
+		keyID            = "end-to-end-test-key"
+		signature        = "test-signature"
 	)
 	sum := sha256.Sum256([]byte(firmware))
 	firmwareSHA256 := hex.EncodeToString(sum[:])
@@ -67,10 +78,17 @@ func TestRun_EndToEnd(t *testing.T) {
 			assert.Nil(t, req.LastUpdate, "최초 체크인에는 보고할 이전 결과가 없어야 한다")
 			writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.CheckInResponse{UpdateTarget: true, CampaignID: campaignID, NextCheckInSeconds: 0})
 		case 2:
-			assert.Equal(t, "1.1.0", req.CurrentVersion, "설치 후 체크인은 새 버전을 보고해야 한다")
 			if assert.NotNil(t, req.LastUpdate, "설치 결과는 다음 체크인에 보고되어야 한다") {
 				assert.Equal(t, campaignID, req.LastUpdate.CampaignID)
-				assert.Equal(t, "SUCCEEDED", req.LastUpdate.Result)
+				if acceptsSignature {
+					assert.Equal(t, "1.1.0", req.CurrentVersion)
+					assert.Equal(t, "SUCCEEDED", req.LastUpdate.Result)
+				} else {
+					assert.Equal(t, "1.0.0", req.CurrentVersion)
+					assert.Equal(t, "FAILED", req.LastUpdate.Result)
+					assert.Equal(t, "SIGNATURE_INVALID", req.LastUpdate.FailureReason)
+					assert.Equal(t, "unknown keyId: "+keyID, req.LastUpdate.FailureDetail)
+				}
 			}
 			writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.CheckInResponse{UpdateTarget: false, NextCheckInSeconds: 0})
 			cancel()
@@ -85,8 +103,10 @@ func TestRun_EndToEnd(t *testing.T) {
 			CampaignID:    campaignID,
 			TargetVersion: "1.1.0",
 			FileSize:      int64(len(firmware)),
-			SHA256:        firmwareSHA256,
+			SHA256:        strings.ToUpper(firmwareSHA256),
 			DownloadURL:   cdn.URL,
+			KeyID:         keyID,
+			Signature:     signature,
 		})
 	})
 
@@ -104,14 +124,39 @@ func TestRun_EndToEnd(t *testing.T) {
 	t.Setenv("DATA_DIR", dataDir)
 	t.Setenv("INITIAL_VERSION", "1.0.0")
 
-	err := run(ctx, zaptest.NewLogger(t))
+	runAgent := run
+	var verifyCalls int
+	if acceptsSignature {
+		runAgent = func(ctx context.Context, logger *zap.Logger) error {
+			return runWithVerifier(ctx, logger, testSignatureVerifier(func(gotKeyID, gotSignature string, metadata firmwaresignature.Metadata) error {
+				verifyCalls++
+				assert.Equal(t, keyID, gotKeyID)
+				assert.Equal(t, signature, gotSignature)
+				assert.Equal(t, firmwaresignature.Metadata{Model: "model-x", Version: "1.1.0", SHA256: firmwareSHA256, Size: int64(len(firmware))}, metadata)
+				return nil
+			}))
+		}
+	}
+	err := runAgent(ctx, zaptest.NewLogger(t))
 	require.NoError(t, err, "종료 신호(컨텍스트 취소)로 끝난 정상 종료는 에러를 반환하지 않아야 한다")
 
 	require.Equal(t, int32(2), checkInCalls.Load())
 
-	installed, err := os.ReadFile(filepath.Join(dataDir, "firmware", "current.bin"))
+	installedPath := filepath.Join(dataDir, "firmware", "current.bin")
+	if !acceptsSignature {
+		assert.NoFileExists(t, installedPath)
+		return
+	}
+	assert.Equal(t, 1, verifyCalls)
+	installed, err := os.ReadFile(installedPath)
 	require.NoError(t, err)
 	require.Equal(t, firmware, string(installed))
+}
+
+type testSignatureVerifier func(string, string, firmwaresignature.Metadata) error
+
+func (verify testSignatureVerifier) Verify(keyID, signature string, metadata firmwaresignature.Metadata) error {
+	return verify(keyID, signature, metadata)
 }
 
 // 서버나 CDN이 응답하지 않아도 체크인 루프가 멈추지 않도록 HTTP 요청에

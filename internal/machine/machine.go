@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -71,6 +72,7 @@ type Machine struct {
 	downloader Downloader
 	installer  Installer
 	store      StateStore
+	verifier   SignatureVerifier
 	logger     *zap.Logger
 
 	identity      VehicleIdentity
@@ -96,7 +98,7 @@ func WithCheckInInterval(d time.Duration) Option {
 // New는 Machine을 만든다. identity와 enrollmentKey는 (재)등록에 쓰고, 등록으로
 // 받은 차량 토큰은 메모리에만 두며 저장하지 않는다. logger가 nil이면 아무것도
 // 하지 않는 로거를 쓴다.
-func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string, opts ...Option) *Machine {
+func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, verifier SignatureVerifier, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string, opts ...Option) *Machine {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -105,6 +107,7 @@ func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger 
 		downloader:      dl,
 		installer:       inst,
 		store:           store,
+		verifier:        verifier,
 		logger:          logger,
 		identity:        identity,
 		enrollmentKey:   enrollmentKey,
@@ -196,6 +199,9 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 // 실패는 결과로 기록하고 IDLE로 돌아간다. 일시적 실패는 상태를 바꾸지 않아
 // 다음 체크인 주기에 처음부터 다시 시도한다.
 func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
+	if slices.Contains(m.snap.SignatureRejectedCampaigns, campaignID) {
+		return
+	}
 	manifest, outcome, err := m.fetchManifest(ctx, campaignID)
 	switch outcome {
 	case manifestNotTarget:
@@ -231,6 +237,15 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 		CampaignID:    manifest.CampaignID,
 		TargetVersion: manifest.TargetVersion,
 		EdgeID:        result.edgeID,
+		Verification: &state.FirmwareVerification{
+			Size:      result.Size,
+			SHA256:    result.SHA256,
+			Signature: manifest.Signature,
+			KeyID:     manifest.KeyID,
+		},
+	}
+	if !m.verifySignature(ctx, pending, result.Size, result.SHA256) {
+		return
 	}
 	installing := m.snap
 	installing.Status = state.StatusInstalling
@@ -240,14 +255,6 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 	}
 
 	m.finishInstall(ctx, pending, result.Path)
-}
-
-// resumeInstall은 다운로드를 마친 뒤 설치 중에 재시작으로 중단된 업데이트의
-// Install을 다시 실행한다 (이슈 #12: "INSTALLING은 설치 재수행").
-func (m *Machine) resumeInstall(ctx context.Context) {
-	pending := m.snap.PendingUpdate
-	sourcePath := m.downloader.Path(pending.CampaignID)
-	m.finishInstall(ctx, pending, sourcePath)
 }
 
 func (m *Machine) finishInstall(ctx context.Context, pending *state.PendingUpdate, sourcePath string) {
@@ -399,18 +406,19 @@ func (m *Machine) fetchManifest(ctx context.Context, campaignID int64) (otaclien
 // recordFailure는 실패한 업데이트 결과를 저장하고 IDLE로 돌아가, 다음
 // 체크인에서 실패를 보고할 수 있게 한다.
 func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID string, reason state.FailureReason, detail string) {
-	next := state.Snapshot{
-		VehicleID:      m.snap.VehicleID,
-		Status:         state.StatusIdle,
-		CurrentVersion: m.snap.CurrentVersion,
-		LastUpdate: &state.LastUpdate{
-			CampaignID:    campaignID,
-			Result:        state.ResultFailed,
-			FailureReason: reason,
-			FailureDetail: detail,
-			EdgeID:        edgeID,
-			FinishedAt:    time.Now(),
-		},
+	next := m.snap
+	next.Status = state.StatusIdle
+	next.PendingUpdate = nil
+	next.LastUpdate = &state.LastUpdate{
+		CampaignID:    campaignID,
+		Result:        state.ResultFailed,
+		FailureReason: reason,
+		FailureDetail: detail,
+		EdgeID:        edgeID,
+		FinishedAt:    time.Now(),
+	}
+	if reason == state.FailureSignatureInvalid && !slices.Contains(next.SignatureRejectedCampaigns, campaignID) {
+		next.SignatureRejectedCampaigns = append(slices.Clone(next.SignatureRejectedCampaigns), campaignID)
 	}
 	m.save(ctx, next)
 }
@@ -418,16 +426,15 @@ func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID st
 // recordSuccess는 성공한 업데이트 결과를 저장하고 새 버전의 IDLE로 돌아가,
 // 다음 체크인에서 성공을 보고할 수 있게 한다.
 func (m *Machine) recordSuccess(ctx context.Context, pending *state.PendingUpdate) {
-	next := state.Snapshot{
-		VehicleID:      m.snap.VehicleID,
-		Status:         state.StatusIdle,
-		CurrentVersion: pending.TargetVersion,
-		LastUpdate: &state.LastUpdate{
-			CampaignID: pending.CampaignID,
-			Result:     state.ResultSucceeded,
-			EdgeID:     pending.EdgeID,
-			FinishedAt: time.Now(),
-		},
+	next := m.snap
+	next.Status = state.StatusIdle
+	next.CurrentVersion = pending.TargetVersion
+	next.PendingUpdate = nil
+	next.LastUpdate = &state.LastUpdate{
+		CampaignID: pending.CampaignID,
+		Result:     state.ResultSucceeded,
+		EdgeID:     pending.EdgeID,
+		FinishedAt: time.Now(),
 	}
 	m.save(ctx, next)
 }
