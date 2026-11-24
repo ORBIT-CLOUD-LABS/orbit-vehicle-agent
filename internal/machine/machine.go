@@ -262,15 +262,18 @@ var (
 	errAbortManifestNotTarget = errors.New("manifest refresh: no longer an update target")
 	errAbortManifestError     = errors.New("manifest refresh failed")
 	errAllEdgesFailed         = errors.New("all download edges failed")
+	errDownloadURLsExpired    = errors.New("download URLs expired")
 )
 
-// downloadWithManifestRetry는 서명 URL이 거부됐거나 모든 Edge가 실패하면
-// 매니페스트를 한 번 새로 받아 새 Edge 목록으로 다시 시도한다.
+// downloadWithManifestRetry는 URL이 만료됐거나 Edge에서 거부됐거나 모든
+// Edge가 실패하면 매니페스트를 한 번 새로 받아 새 Edge 목록으로 시도한다.
 // 호출자가 갱신된 CampaignID/TargetVersion을 사용할 수 있게 *manifest를
 // 새 매니페스트로 덮어쓴다.
 func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
 	result, err := m.downloadFromEdges(ctx, manifest)
-	if !errors.Is(err, downloader.ErrManifestExpired) && !errors.Is(err, errAllEdgesFailed) {
+	if !errors.Is(err, errDownloadURLsExpired) &&
+		!errors.Is(err, downloader.ErrManifestExpired) &&
+		!errors.Is(err, errAllEdgesFailed) {
 		return result, err
 	}
 
@@ -287,6 +290,10 @@ func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otacl
 }
 
 func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
+	if expiresAt := manifest.URLExpiresAt; !expiresAt.IsZero() && !time.Now().Before(expiresAt) {
+		return downloader.Result{}, errDownloadURLsExpired
+	}
+
 	urls := make([]string, 0, 1+len(manifest.FallbackURLs))
 	urls = append(urls, manifest.DownloadURL)
 	for _, fallback := range manifest.FallbackURLs {

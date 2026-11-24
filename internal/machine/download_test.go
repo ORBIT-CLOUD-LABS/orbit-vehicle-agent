@@ -24,15 +24,40 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 		firmware = "firmware-image"
 		timeout  = 0
 	)
+	now := time.Now()
+	expired := now.Add(-time.Hour)
+	valid := now.Add(time.Hour)
 	tests := []struct {
-		name          string
-		edgeStatuses  [][]int
-		freshEdges    []int
-		wantRequests  []int
-		wantPaths     []string
-		wantManifests int
-		wantResult    state.Result
+		name             string
+		edgeStatuses     [][]int
+		freshEdges       []int
+		initialExpiresAt time.Time
+		freshExpiresAt   time.Time
+		wantRequests     []int
+		wantPaths        []string
+		wantManifests    int
+		wantResult       state.Result
 	}{
+		{
+			name: "유효한 URL은 바로 요청", edgeStatuses: [][]int{{http.StatusOK}},
+			initialExpiresAt: valid, wantRequests: []int{0}, wantPaths: []string{"/old"},
+			wantManifests: 1, wantResult: state.ResultSucceeded,
+		},
+		{
+			name: "만료 시 갱신한 URL만 요청", edgeStatuses: [][]int{{http.StatusOK}},
+			initialExpiresAt: expired, freshExpiresAt: valid, wantRequests: []int{0}, wantPaths: []string{"/new"},
+			wantManifests: 2, wantResult: state.ResultSucceeded,
+		},
+		{
+			name: "갱신한 URL도 만료됐으면 Edge 요청 없이 실패", edgeStatuses: [][]int{{http.StatusOK}},
+			initialExpiresAt: expired, freshExpiresAt: expired,
+			wantManifests: 2, wantResult: state.ResultFailed,
+		},
+		{
+			name: "만료로 갱신한 뒤 410을 받아도 다시 갱신하지 않음", edgeStatuses: [][]int{{http.StatusGone}, {http.StatusOK}},
+			initialExpiresAt: expired, freshExpiresAt: valid, wantRequests: []int{0}, wantPaths: []string{"/new"},
+			wantManifests: 2, wantResult: state.ResultFailed,
+		},
 		{
 			name: "502 후 같은 Edge에서 성공", edgeStatuses: [][]int{{http.StatusBadGateway, http.StatusOK}, {http.StatusOK}},
 			wantRequests: []int{0, 0}, wantManifests: 1, wantResult: state.ResultSucceeded,
@@ -126,7 +151,8 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			manifest := otaclient.Manifest{
 				CampaignID: 1, TargetVersion: "1.1.0",
 				FileSize: int64(len(firmware)), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(firmware))),
-				DownloadURL: urls[0] + "/old",
+				DownloadURL:  urls[0] + "/old",
+				URLExpiresAt: tt.initialExpiresAt,
 			}
 			oldURLs := urls
 			if len(tt.freshEdges) > 0 {
@@ -137,6 +163,7 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			}
 			fresh := manifest
 			fresh.DownloadURL = urls[0] + "/new"
+			fresh.URLExpiresAt = tt.freshExpiresAt
 			if len(tt.freshEdges) > 0 {
 				fresh.DownloadURL = urls[tt.freshEdges[0]] + "/new"
 				fresh.FallbackURLs = nil
