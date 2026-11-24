@@ -388,12 +388,14 @@ func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(
 
 	dl := &fakeDownloader{path: "/data/downloads/1.bin"}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
-	store := &fakeStore{load: state.Snapshot{
+	dir := t.TempDir()
+	require.NoError(t, state.NewStore(dir, "v1").Save(ctx, state.Snapshot{
 		VehicleID:      "v1",
 		Status:         state.StatusInstalling,
 		CurrentVersion: "1.0.0",
-		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0"},
-	}}
+		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0", EdgeID: "edge-daejeon"},
+	}))
+	store := state.NewStore(dir, "v1")
 	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
@@ -407,6 +409,7 @@ func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(
 	lastUpdate := ota.checkInCalls[0].LastUpdate
 	require.NotNil(t, lastUpdate)
 	assert.Equal(t, "SUCCEEDED", lastUpdate.Result)
+	assert.Equal(t, "edge-daejeon", lastUpdate.EdgeID)
 }
 
 // VEHICLE-REQ-001: 체크인이 401이면 재등록 후 재개한다.
