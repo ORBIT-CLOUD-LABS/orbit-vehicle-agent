@@ -2,6 +2,7 @@ package otaclient_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -265,6 +266,65 @@ func TestClient_GetManifest_Success(t *testing.T) {
 	assert.Equal(t, int64(1024), manifest.FileSize)
 	assert.Equal(t, "abc123", manifest.SHA256)
 	assert.True(t, expiresAt.Equal(manifest.URLExpiresAt))
+	assert.Nil(t, manifest.Edge)
+	assert.Nil(t, manifest.FallbackURLs)
+	assert.Empty(t, manifest.Signature)
+	assert.Empty(t, manifest.KeyID)
+}
+
+// MANIFEST-REQ-001
+func TestClient_GetManifest_Phase2Fields(t *testing.T) {
+	distance := 3.2
+	zero := 0.0
+	tests := []struct {
+		name         string
+		distanceJSON json.RawMessage
+		wantDistance *float64
+	}{
+		{name: "거리 있음", distanceJSON: json.RawMessage("3.2"), wantDistance: &distance},
+		{name: "거리 0", distanceJSON: json.RawMessage("0"), wantDistance: &zero},
+		{name: "거리 알 수 없음", distanceJSON: json.RawMessage("null")},
+	}
+	const expiresAt = "2026-10-28T11:00:00Z"
+	signature := base64.StdEncoding.EncodeToString(make([]byte, 64))
+	fallbackURLs := json.RawMessage(`[
+		{"edgeId":"edge-daejeon","url":"https://daejeon.example.com/firmware.bin"},
+		{"edgeId":"edge-busan","url":"https://busan.example.com/firmware.bin"}
+	]`)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", map[string]any{
+					"campaignId":    7,
+					"targetVersion": "1.1.0",
+					"fileSize":      1024,
+					"sha256":        "abc123",
+					"edge":          map[string]any{"edgeId": "edge-seoul", "distanceKm": tt.distanceJSON},
+					"downloadUrl":   "https://seoul.example.com/firmware.bin",
+					"fallbackUrls":  fallbackURLs,
+					"urlExpiresAt":  expiresAt,
+					"signature":     signature,
+					"keyId":         "v1",
+				})
+			}))
+			defer server.Close()
+
+			client := otaclient.New(server.URL, server.Client())
+			manifest, err := client.GetManifest(context.Background(), "car-0001", 7, "vehicle-token")
+
+			require.NoError(t, err)
+			assert.Equal(t, &otaclient.ManifestEdge{EdgeID: "edge-seoul", DistanceKM: tt.wantDistance}, manifest.Edge)
+			assert.Equal(t, "https://seoul.example.com/firmware.bin", manifest.DownloadURL)
+			assert.Equal(t, []otaclient.FallbackURL{
+				{EdgeID: "edge-daejeon", URL: "https://daejeon.example.com/firmware.bin"},
+				{EdgeID: "edge-busan", URL: "https://busan.example.com/firmware.bin"},
+			}, manifest.FallbackURLs)
+			assert.Equal(t, expiresAt, manifest.URLExpiresAt.Format(time.RFC3339))
+			assert.Equal(t, signature, manifest.Signature)
+			assert.Equal(t, "v1", manifest.KeyID)
+		})
+	}
 }
 
 // MANIFEST-REQ-001

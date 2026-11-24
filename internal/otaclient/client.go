@@ -119,14 +119,30 @@ func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, re
 	return resp, nil
 }
 
-// manifest는 캠페인을 위해 다운로드한 펌웨어를 설명합니다(MANIFEST-REQ-001).
+// Manifest는 캠페인의 펌웨어와 다운로드 위치를 설명합니다(MANIFEST-REQ-001).
 type Manifest struct {
-	CampaignID    int64     `json:"campaignId"`
-	TargetVersion string    `json:"targetVersion"`
-	FileSize      int64     `json:"fileSize"`
-	SHA256        string    `json:"sha256"`
-	DownloadURL   string    `json:"downloadUrl"`
-	URLExpiresAt  time.Time `json:"urlExpiresAt"`
+	CampaignID    int64         `json:"campaignId"`
+	TargetVersion string        `json:"targetVersion"`
+	FileSize      int64         `json:"fileSize"`
+	SHA256        string        `json:"sha256"`
+	Edge          *ManifestEdge `json:"edge,omitempty"`
+	DownloadURL   string        `json:"downloadUrl"`
+	FallbackURLs  []FallbackURL `json:"fallbackUrls,omitempty"`
+	URLExpiresAt  time.Time     `json:"urlExpiresAt"`
+	Signature     string        `json:"signature,omitempty"`
+	KeyID         string        `json:"keyId,omitempty"`
+}
+
+// ManifestEdge는 서버가 선택한 기본 CDN Edge입니다.
+type ManifestEdge struct {
+	EdgeID     string   `json:"edgeId"`
+	DistanceKM *float64 `json:"distanceKm"` // 차량 위치를 모르면 nil입니다.
+}
+
+// FallbackURL은 대체 CDN Edge와 해당 다운로드 URL을 담습니다.
+type FallbackURL struct {
+	EdgeID string `json:"edgeId"`
+	URL    string `json:"url"`
 }
 
 // GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다.
