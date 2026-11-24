@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,6 +81,7 @@ func TestClient_Register_InvalidSuccessData(t *testing.T) {
 		{name: "data 누락", body: `{"isSuccess":true,"code":"OK","vehicleToken":"token-abc"}`},
 		{name: "data null", body: `{"isSuccess":true,"code":"OK","data":null}`},
 		{name: "data 타입 불일치", body: `{"isSuccess":true,"code":"OK","data":[]}`},
+		{name: "응답 크기 초과", body: `{"data":{"vehicleToken":"token-abc"}}` + strings.Repeat(" ", 64<<10)},
 	}
 
 	for _, tt := range tests {
@@ -209,6 +212,29 @@ func TestClient_CheckIn_Errors(t *testing.T) {
 			assert.Equal(t, tt.message, apiErr.Message)
 		})
 	}
+}
+
+// VEHICLE-REQ-001
+func TestClient_CheckIn_LimitsErrorMessage(t *testing.T) {
+	html := "<html>" + strings.Repeat("오류 ", 12_000) + "</html>"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	client := otaclient.New(server.URL, server.Client())
+	_, err := client.CheckIn(context.Background(), "car-0001", "vehicle-token", otaclient.CheckInRequest{CurrentVersion: "1.0.0"})
+
+	var apiErr *otaclient.APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Empty(t, apiErr.Code)
+	require.LessOrEqual(t, len(apiErr.Message), 512)
+	assert.True(t, strings.HasPrefix(apiErr.Message, "<html>"))
+	assert.True(t, strings.HasSuffix(apiErr.Message, "..."))
+	assert.True(t, utf8.ValidString(apiErr.Message))
 }
 
 // MANIFEST-REQ-001

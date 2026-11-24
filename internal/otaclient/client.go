@@ -11,7 +11,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+)
+
+const (
+	maxResponseBodyBytes = 64 << 10
+	maxErrorMessageBytes = 512
 )
 
 // OTA 서버가 반환하는 오류 코드, APIError를 분류하는 데 사용됩니다.
@@ -157,13 +163,16 @@ func (c *Client) do(ctx context.Context, method, path, bearerToken string, body,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return fmt.Errorf("read response body: %w", err)
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return parseAPIError(resp.StatusCode, respBody)
+	}
+	if len(respBody) > maxResponseBodyBytes {
+		return fmt.Errorf("ota response body exceeds %d bytes", maxResponseBodyBytes)
 	}
 
 	if out == nil {
@@ -192,8 +201,16 @@ type errorBody struct {
 
 func parseAPIError(statusCode int, body []byte) error {
 	var parsed errorBody
-	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Code == "" {
-		return &APIError{StatusCode: statusCode, Message: string(body)}
+	if len(body) <= maxResponseBodyBytes && json.Unmarshal(body, &parsed) == nil && parsed.Code != "" {
+		return &APIError{StatusCode: statusCode, Code: parsed.Code, Message: truncateErrorMessage(parsed.Message)}
 	}
-	return &APIError{StatusCode: statusCode, Code: parsed.Code, Message: parsed.Message}
+	return &APIError{StatusCode: statusCode, Message: truncateErrorMessage(string(body))}
+}
+
+func truncateErrorMessage(message string) string {
+	if len(message) <= maxErrorMessageBytes {
+		return message
+	}
+	const suffix = "..."
+	return strings.ToValidUTF8(message[:maxErrorMessageBytes-len(suffix)], "") + suffix
 }
