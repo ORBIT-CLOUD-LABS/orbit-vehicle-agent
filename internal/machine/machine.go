@@ -220,7 +220,7 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 			return
 		}
 		if errors.Is(dlErr, errAbortManifestError) {
-			m.logger.Warn("refresh manifest after cdn url rejection failed, retrying next cycle", zap.Error(dlErr))
+			m.logger.Warn("refresh manifest failed, retrying next cycle", zap.Error(dlErr))
 			return
 		}
 		reason, detail := classifyDownloadFailure(dlErr)
@@ -261,16 +261,16 @@ func (m *Machine) finishInstall(ctx context.Context, campaignID int64, targetVer
 var (
 	errAbortManifestNotTarget = errors.New("manifest refresh: no longer an update target")
 	errAbortManifestError     = errors.New("manifest refresh failed")
+	errAllEdgesFailed         = errors.New("all download edges failed")
 )
 
-// downloadWithManifestRetry는 manifest의 펌웨어를 다운로드한다. CDN이 서명
-// URL을 거부하면(downloader.ErrManifestExpired) 매니페스트를 한 번 새로 받아
-// 다시 다운로드한다 (이슈 #12: "CDN URL 거부 시 매니페스트 재요청 후
-// 재다운로드"). 이때 호출자가 (바뀌었을 수 있는) CampaignID/TargetVersion을
-// 이어서 써야 하므로 *manifest를 새 매니페스트로 덮어쓴다.
+// downloadWithManifestRetry는 서명 URL이 거부됐거나 모든 Edge가 실패하면
+// 매니페스트를 한 번 새로 받아 새 Edge 목록으로 다시 시도한다.
+// 호출자가 갱신된 CampaignID/TargetVersion을 사용할 수 있게 *manifest를
+// 새 매니페스트로 덮어쓴다.
 func (m *Machine) downloadWithManifestRetry(ctx context.Context, manifest *otaclient.Manifest) (downloader.Result, error) {
 	result, err := m.downloadFromEdges(ctx, manifest)
-	if err == nil || !errors.Is(err, downloader.ErrManifestExpired) {
+	if !errors.Is(err, downloader.ErrManifestExpired) && !errors.Is(err, errAllEdgesFailed) {
 		return result, err
 	}
 
@@ -301,7 +301,7 @@ func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Man
 		}
 		lastErr = err
 	}
-	return downloader.Result{}, lastErr
+	return downloader.Result{}, fmt.Errorf("%w: %w", errAllEdgesFailed, lastErr)
 }
 
 func (m *Machine) downloadFromEdge(ctx context.Context, manifest *otaclient.Manifest, url string) (downloader.Result, error) {
