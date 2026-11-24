@@ -335,7 +335,11 @@ func canRetryEdge(err error) bool {
 }
 
 func canSwitchEdge(err error) bool {
-	if canRetryEdge(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	var httpErr *downloader.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode >= http.StatusInternalServerError && httpErr.StatusCode < 600
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	var connErr *net.OpError

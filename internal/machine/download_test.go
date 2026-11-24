@@ -67,6 +67,11 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			wantRequests: []int{0, 0, 0, 1, 2}, wantManifests: 1, wantResult: state.ResultSucceeded,
 		},
 		{
+			name:         "503과 500은 같은 Edge 재시도 없이 전환",
+			edgeStatuses: [][]int{{http.StatusServiceUnavailable}, {http.StatusInternalServerError}, {http.StatusOK}},
+			wantRequests: []int{0, 1, 2}, wantManifests: 1, wantResult: state.ResultSucceeded,
+		},
+		{
 			name: "연결 실패 후 즉시 전환", edgeStatuses: [][]int{nil, {http.StatusOK}},
 			wantRequests: []int{0, 1}, wantManifests: 1, wantResult: state.ResultSucceeded,
 		},
