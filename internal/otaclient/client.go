@@ -61,10 +61,8 @@ type RegisterRequest struct {
 	CurrentVersion string `json:"currentVersion"`
 }
 
-// RegisterResponse는 차량 등록 응답 본문입니다. VehicleToken은 이 호출에서만 반환되며, 에이전트는 메모리에만 보관합니다.
-//
-// flow.md는 응답 본문 필드 이름을 정확히 지정하지 않고 한 번 토큰이 반환된다고만 명시합니다. VehicleToken은 나머지 API와 일치하는 camelCase를 가정합니다. OTA 서버가 존재하면 확인하십시오.
-
+// RegisterResponse는 차량 등록 성공 응답의 data입니다(orbit의 docs/api-spec.md §2.1).
+// 서버는 등록과 재등록 시 data.vehicleToken을 반환하고, 에이전트는 이를 메모리에만 보관합니다.
 type RegisterResponse struct {
 	VehicleToken string `json:"vehicleToken"`
 }
@@ -101,7 +99,7 @@ type CheckInResponse struct {
 }
 
 // CheckIn은 현재 버전과, 있다면 마지막 업데이트의 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
-// 호출자는 CodeUnauthorized를 "재등록 및 재시도"로, 500 응답(Code가 비어 있음)을 "다음 체크인 주기에 재시도"로 처리해야 합니다.
+// 호출자는 CodeUnauthorized를 받으면 재등록 후 재시도하고, HTTP 500을 받으면 다음 체크인 주기에 재시도해야 합니다.
 
 func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, req CheckInRequest) (CheckInResponse, error) {
 	var resp CheckInResponse

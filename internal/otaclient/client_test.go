@@ -183,6 +183,7 @@ func TestClient_CheckIn_Errors(t *testing.T) {
 	}{
 		{name: "401 UNAUTHORIZED", statusCode: http.StatusUnauthorized, code: otaclient.CodeUnauthorized, message: "차량 토큰 인증에 실패했습니다."},
 		{name: "403 VEHICLE_MISMATCH", statusCode: http.StatusForbidden, code: otaclient.CodeVehicleMismatch, message: "토큰의 차량과 요청 경로의 차량이 다릅니다."},
+		{name: "500 INTERNAL_SERVER_ERROR", statusCode: http.StatusInternalServerError, code: "INTERNAL_SERVER_ERROR", message: "서버 내부 오류가 발생했습니다."},
 		{name: "500 코드 없음", statusCode: http.StatusInternalServerError},
 	}
 
