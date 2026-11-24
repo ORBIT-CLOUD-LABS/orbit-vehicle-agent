@@ -41,13 +41,13 @@ const (
 
 // PendingUpdate는 다운로드 또는 설치 중인 캠페인을 식별합니다.
 type PendingUpdate struct {
-	CampaignID    string `json:"campaign_id"`
+	CampaignID    int64  `json:"campaign_id"`
 	TargetVersion string `json:"target_version"`
 }
 
 // LastUpdate는 가장 최근의 업데이트 결과이며, 다음 체크인에서 보고되고 서버가 확인하면 지워집니다.
 type LastUpdate struct {
-	CampaignID    string        `json:"campaign_id"`
+	CampaignID    int64         `json:"campaign_id"`
 	Result        Result        `json:"result"`
 	FailureReason FailureReason `json:"failure_reason,omitempty"`
 	FailureDetail string        `json:"failure_detail,omitempty"`
@@ -185,8 +185,8 @@ func validatePendingUpdate(status Status, pending *PendingUpdate) error {
 	if pending == nil {
 		return fmt.Errorf("상태 %q: pending_update는 필수입니다.", status)
 	}
-	if pending.CampaignID == "" {
-		return fmt.Errorf("pending_update.campaign_id는 필수입니다.")
+	if pending.CampaignID <= 0 {
+		return fmt.Errorf("pending_update.campaign_id는 양수여야 합니다.")
 	}
 	if pending.TargetVersion == "" {
 		return fmt.Errorf("pending_update.target_version은 필수입니다.")
@@ -195,8 +195,8 @@ func validatePendingUpdate(status Status, pending *PendingUpdate) error {
 }
 
 func validateLastUpdate(last *LastUpdate) error {
-	if last.CampaignID == "" {
-		return fmt.Errorf("last_update.campaign_id는 필수입니다.")
+	if last.CampaignID <= 0 {
+		return fmt.Errorf("last_update.campaign_id는 양수여야 합니다.")
 	}
 	if last.FinishedAt.IsZero() {
 		return fmt.Errorf("last_update.finished_at은 필수입니다.")

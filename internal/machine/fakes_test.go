@@ -3,6 +3,7 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
@@ -27,7 +28,7 @@ type fakeOTA struct {
 
 	manifestResponses []otaclient.Manifest
 	manifestErrs      []error
-	manifestCalls     []string
+	manifestCalls     []int64
 	manifestTokens    []string
 	onGetManifest     func(call int)
 }
@@ -48,7 +49,7 @@ func (f *fakeOTA) CheckIn(_ context.Context, _, vehicleToken string, req otaclie
 	return pick(f.checkInResponses, i), pick(f.checkInErrs, i)
 }
 
-func (f *fakeOTA) GetManifest(_ context.Context, _, campaignID, vehicleToken string) (otaclient.Manifest, error) {
+func (f *fakeOTA) GetManifest(_ context.Context, _ string, campaignID int64, vehicleToken string) (otaclient.Manifest, error) {
 	i := len(f.manifestCalls)
 	f.manifestCalls = append(f.manifestCalls, campaignID)
 	f.manifestTokens = append(f.manifestTokens, vehicleToken)
@@ -75,21 +76,21 @@ func pick[T any](items []T, i int) T {
 type fakeDownloader struct {
 	results []downloader.Result
 	errs    []error
-	calls   []string // 호출된 campaignID 목록
+	calls   []int64 // 호출된 campaignID 목록
 	path    string
 }
 
-func (f *fakeDownloader) Download(_ context.Context, campaignID, _ string, _ int64, _ string) (downloader.Result, error) {
+func (f *fakeDownloader) Download(_ context.Context, campaignID int64, _ string, _ int64, _ string) (downloader.Result, error) {
 	i := len(f.calls)
 	f.calls = append(f.calls, campaignID)
 	return pick(f.results, i), pick(f.errs, i)
 }
 
-func (f *fakeDownloader) Path(campaignID string) string {
+func (f *fakeDownloader) Path(campaignID int64) string {
 	if f.path != "" {
 		return f.path
 	}
-	return "/data/downloads/" + campaignID + ".bin"
+	return "/data/downloads/" + strconv.FormatInt(campaignID, 10) + ".bin"
 }
 
 // fakeInstaller는 machine.Installer의 손으로 만든 테스트 대역이다.

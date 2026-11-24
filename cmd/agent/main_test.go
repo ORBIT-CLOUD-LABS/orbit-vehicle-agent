@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,10 +28,10 @@ import (
 // 설치(⑦), 다음 체크인의 결과 보고(④). 서버가 결과를 확인하면 루프를 멈춘다.
 func TestRun_EndToEnd(t *testing.T) {
 	const (
-		vehicleID  = "car-0001"
-		enrollKey  = "enrollment-secret"
-		campaignID = "cmp-1"
-		firmware   = "verified-firmware-bytes"
+		vehicleID        = "car-0001"
+		enrollKey        = "enrollment-secret"
+		campaignID int64 = 7
+		firmware         = "verified-firmware-bytes"
 	)
 	sum := sha256.Sum256([]byte(firmware))
 	firmwareSHA256 := hex.EncodeToString(sum[:])
@@ -78,7 +79,7 @@ func TestRun_EndToEnd(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("GET /api/v1/vehicles/"+vehicleID+"/campaigns/"+campaignID+"/manifest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/vehicles/"+vehicleID+"/campaigns/"+strconv.FormatInt(campaignID, 10)+"/manifest", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
 		writeOTASuccess(t, w, http.StatusOK, "OK", otaclient.Manifest{
 			CampaignID:    campaignID,

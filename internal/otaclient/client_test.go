@@ -128,13 +128,11 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "1.0.0", body.CurrentVersion)
 		if assert.NotNil(t, body.LastUpdate) {
-			assert.Equal(t, "cmp-1", body.LastUpdate.CampaignID)
+			assert.Equal(t, int64(1), body.LastUpdate.CampaignID)
 		}
 
-		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.CheckInResponse{
-			UpdateTarget:       true,
-			CampaignID:         "cmp-2",
-			NextCheckInSeconds: 30,
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", map[string]any{
+			"updateTarget": true, "campaignId": int64(9007199254740993), "nextCheckInSeconds": 30,
 		})
 	}))
 	defer server.Close()
@@ -143,7 +141,7 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 	resp, err := client.CheckIn(context.Background(), "car-0001", "vehicle-token", otaclient.CheckInRequest{
 		CurrentVersion: "1.0.0",
 		LastUpdate: &otaclient.LastUpdate{
-			CampaignID: "cmp-1",
+			CampaignID: 1,
 			Result:     "SUCCEEDED",
 			FinishedAt: time.Now(),
 		},
@@ -151,7 +149,7 @@ func TestClient_CheckIn_UpdateTarget(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, resp.UpdateTarget)
-	assert.Equal(t, "cmp-2", resp.CampaignID)
+	assert.Equal(t, int64(9007199254740993), resp.CampaignID)
 	assert.Equal(t, 30, resp.NextCheckInSeconds)
 }
 
@@ -173,6 +171,7 @@ func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, resp.UpdateTarget)
+	assert.Zero(t, resp.CampaignID)
 	assert.Equal(t, 30, resp.NextCheckInSeconds)
 }
 
@@ -242,26 +241,26 @@ func TestClient_GetManifest_Success(t *testing.T) {
 	expiresAt := time.Now().Add(10 * time.Minute).Truncate(time.Second).UTC()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/cmp-1/manifest", r.URL.Path)
+		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/1/manifest", r.URL.Path)
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "Bearer vehicle-token", r.Header.Get("Authorization"))
 
-		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{
-			CampaignID:    "cmp-1",
-			TargetVersion: "1.1.0",
-			FileSize:      1024,
-			SHA256:        "abc123",
-			DownloadURL:   "https://cdn.example.com/firmware.bin?md5=x&expires=1",
-			URLExpiresAt:  expiresAt,
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", map[string]any{
+			"campaignId":    int64(1),
+			"targetVersion": "1.1.0",
+			"fileSize":      1024,
+			"sha256":        "abc123",
+			"downloadUrl":   "https://cdn.example.com/firmware.bin?md5=x&expires=1",
+			"urlExpiresAt":  expiresAt,
 		})
 	}))
 	defer server.Close()
 
 	client := otaclient.New(server.URL, server.Client())
-	manifest, err := client.GetManifest(context.Background(), "car-0001", "cmp-1", "vehicle-token")
+	manifest, err := client.GetManifest(context.Background(), "car-0001", 1, "vehicle-token")
 
 	require.NoError(t, err)
-	assert.Equal(t, "cmp-1", manifest.CampaignID)
+	assert.Equal(t, int64(1), manifest.CampaignID)
 	assert.Equal(t, "1.1.0", manifest.TargetVersion)
 	assert.Equal(t, int64(1024), manifest.FileSize)
 	assert.Equal(t, "abc123", manifest.SHA256)
@@ -269,17 +268,32 @@ func TestClient_GetManifest_Success(t *testing.T) {
 }
 
 // MANIFEST-REQ-001
-func TestClient_GetManifest_EscapesPathParams(t *testing.T) {
+func TestClient_GetManifest_RejectsMismatchedCampaignID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/cmp%2F1%3Fx=y/manifest", r.URL.EscapedPath())
-		assert.Empty(t, r.URL.RawQuery)
-
-		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{CampaignID: "cmp/1?x=y"})
+		assert.Equal(t, "/api/v1/vehicles/car-0001/campaigns/7/manifest", r.URL.Path)
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{CampaignID: 8})
 	}))
 	defer server.Close()
 
 	client := otaclient.New(server.URL, server.Client())
-	_, err := client.GetManifest(context.Background(), "car-0001", "cmp/1?x=y", "vehicle-token")
+	manifest, err := client.GetManifest(context.Background(), "car-0001", 7, "vehicle-token")
+
+	require.ErrorContains(t, err, "manifest campaign id 8 does not match requested id 7")
+	assert.Equal(t, otaclient.Manifest{}, manifest)
+}
+
+// MANIFEST-REQ-001
+func TestClient_GetManifest_EscapesVehicleID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/vehicles/car%2F1%3Fx=y/campaigns/9007199254740993/manifest", r.URL.EscapedPath())
+		assert.Empty(t, r.URL.RawQuery)
+
+		writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.Manifest{CampaignID: 9007199254740993})
+	}))
+	defer server.Close()
+
+	client := otaclient.New(server.URL, server.Client())
+	_, err := client.GetManifest(context.Background(), "car/1?x=y", 9007199254740993, "vehicle-token")
 
 	require.NoError(t, err)
 }
@@ -305,7 +319,7 @@ func TestClient_GetManifest_Errors(t *testing.T) {
 			defer server.Close()
 
 			client := otaclient.New(server.URL, server.Client())
-			_, err := client.GetManifest(context.Background(), "car-0001", "cmp-1", "vehicle-token")
+			_, err := client.GetManifest(context.Background(), "car-0001", 1, "vehicle-token")
 
 			require.Error(t, err)
 			var apiErr *otaclient.APIError

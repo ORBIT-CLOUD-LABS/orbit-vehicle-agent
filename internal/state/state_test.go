@@ -39,11 +39,14 @@ func TestStore_SaveThenLoad_RoundTrips(t *testing.T) {
 		Status:         state.StatusDownloading,
 		CurrentVersion: "1.0.0",
 		PendingUpdate: &state.PendingUpdate{
-			CampaignID:    "cmp-1",
+			CampaignID:    1,
 			TargetVersion: "1.1.0",
 		},
 	}
 	require.NoError(t, store.Save(ctx, want))
+	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"campaign_id": 1`)
 
 	got, err := store.Load(ctx, "1.0.0")
 
@@ -62,7 +65,7 @@ func TestStore_SaveThenLoad_WithLastUpdate(t *testing.T) {
 		Status:         state.StatusIdle,
 		CurrentVersion: "1.0.0",
 		LastUpdate: &state.LastUpdate{
-			CampaignID:    "cmp-1",
+			CampaignID:    1,
 			Result:        state.ResultFailed,
 			FailureReason: state.FailureHashMismatch,
 			FailureDetail: "sha256 mismatch",
@@ -70,6 +73,9 @@ func TestStore_SaveThenLoad_WithLastUpdate(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.Save(ctx, want))
+	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"campaign_id": 1`)
 
 	got, err := store.Load(ctx, "1.0.0")
 
@@ -130,7 +136,7 @@ func TestStore_Save_RejectsInvalidState(t *testing.T) {
 				VehicleID:      "car-0001",
 				Status:         state.StatusIdle,
 				CurrentVersion: "1.0.0",
-				PendingUpdate:  &state.PendingUpdate{CampaignID: "cmp-1", TargetVersion: "1.1.0"},
+				PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0"},
 			},
 		},
 		{
@@ -153,7 +159,7 @@ func TestStore_Save_RejectsInvalidState(t *testing.T) {
 				Status:         state.StatusIdle,
 				CurrentVersion: "1.0.0",
 				LastUpdate: &state.LastUpdate{
-					CampaignID: "cmp-1",
+					CampaignID: 1,
 					Result:     state.ResultFailed,
 					FinishedAt: time.Now(),
 				},
@@ -166,7 +172,7 @@ func TestStore_Save_RejectsInvalidState(t *testing.T) {
 				Status:         state.StatusIdle,
 				CurrentVersion: "1.0.0",
 				LastUpdate: &state.LastUpdate{
-					CampaignID:    "cmp-1",
+					CampaignID:    1,
 					Result:        state.ResultSucceeded,
 					FailureReason: state.FailureInstallFailed,
 					FinishedAt:    time.Now(),
@@ -180,7 +186,7 @@ func TestStore_Save_RejectsInvalidState(t *testing.T) {
 				Status:         state.StatusIdle,
 				CurrentVersion: "1.0.0",
 				LastUpdate: &state.LastUpdate{
-					CampaignID: "cmp-1",
+					CampaignID: 1,
 					Result:     state.ResultSucceeded,
 				},
 			},
