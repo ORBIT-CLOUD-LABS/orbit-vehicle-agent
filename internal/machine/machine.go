@@ -80,8 +80,9 @@ type Machine struct {
 
 	checkInInterval time.Duration
 
-	vehicleToken string
-	snap         state.Snapshot
+	vehicleToken         string
+	snap                 state.Snapshot
+	loggedSignatureSkips map[int64]struct{}
 }
 
 // Option은 Machine 설정을 바꾼다.
@@ -134,6 +135,7 @@ func (m *Machine) Run(ctx context.Context, initialVersion string) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 	m.snap = snap
+	m.loggedSignatureSkips = make(map[int64]struct{})
 
 	if err := m.register(ctx); err != nil {
 		return fmt.Errorf("register vehicle: %w", err)
@@ -201,6 +203,14 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 	if rejection, rejected := m.snap.SignatureRejections[campaignID]; rejected &&
 		(rejection.MissingKeyID == "" || !m.verifier.HasKey(rejection.MissingKeyID)) {
+		if _, logged := m.loggedSignatureSkips[campaignID]; !logged {
+			m.logger.Info("skipping campaign after firmware signature rejection",
+				zap.Int64("campaign_id", campaignID),
+				zap.String("failure_reason", string(state.FailureSignatureInvalid)),
+				zap.String("missing_key_id", rejection.MissingKeyID),
+			)
+			m.loggedSignatureSkips[campaignID] = struct{}{}
+		}
 		return
 	}
 	manifest, outcome, err := m.fetchManifest(ctx, campaignID)

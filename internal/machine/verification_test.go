@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
@@ -157,9 +159,18 @@ func TestMachine_Run_SignatureRejectionSurvivesCheckInAndRestart(t *testing.T) {
 					dl := &fakeDownloader{results: []downloader.Result{{Path: "firmware.bin"}}}
 					inst := &fakeInstaller{}
 					store := state.NewStore(dir, testIdentity.VehicleID)
-					m := machine.New(ota, dl, inst, store, boot.verifier, nil, testIdentity, "enroll-key", fastCheckIn)
+					core, logs := observer.New(zap.InfoLevel)
+					m := machine.New(ota, dl, inst, store, boot.verifier, zap.New(core), testIdentity, "enroll-key", fastCheckIn)
 					require.ErrorIs(t, runMachine(t, m, ctx, "1.0.0"), context.Canceled)
 
+					skips := logs.FilterMessage("skipping campaign after firmware signature rejection").All()
+					if boot.wantResult == state.ResultSucceeded {
+						assert.Empty(t, skips)
+					} else {
+						require.Len(t, skips, 1)
+						assert.Equal(t, campaignID, skips[0].ContextMap()["campaign_id"])
+						assert.Equal(t, string(state.FailureSignatureInvalid), skips[0].ContextMap()["failure_reason"])
+					}
 					require.Len(t, ota.checkInCalls, 3)
 					assert.Nil(t, ota.checkInCalls[2].LastUpdate)
 					if boot.wantResult == "" {
