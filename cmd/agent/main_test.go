@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/config"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 )
@@ -31,14 +32,20 @@ import (
 // 설치(⑦), 다음 체크인의 결과 보고(④). 서버가 결과를 확인하면 루프를 멈춘다.
 func TestRun_EndToEnd(t *testing.T) {
 	t.Run("verified firmware installs with configured location", func(t *testing.T) {
-		testRunEndToEnd(t, true, "37.5665", "126.978")
+		testRunEndToEnd(t, true, "", "37.5665", "126.978")
 	})
 	t.Run("unknown key fails with embedded verifier and no location", func(t *testing.T) {
-		testRunEndToEnd(t, false, "", "")
+		testRunEndToEnd(t, false, "", "", "")
+	})
+	t.Run("wander position changes across check-ins", func(t *testing.T) {
+		testRunEndToEnd(t, true, config.LocationWander, "35.18", "129.07")
+	})
+	t.Run("route position changes across check-ins", func(t *testing.T) {
+		testRunEndToEnd(t, true, config.LocationRoute, "", "")
 	})
 }
 
-func testRunEndToEnd(t *testing.T, acceptsSignature bool, latitude, longitude string) {
+func testRunEndToEnd(t *testing.T, acceptsSignature bool, mode config.LocationMode, latitude, longitude string) {
 	t.Helper()
 	const (
 		vehicleID        = "car-0001"
@@ -62,6 +69,7 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool, latitude, longitude st
 	defer cancel()
 
 	var checkInCalls atomic.Int32
+	var lastLocation atomic.Pointer[otaclient.Location]
 
 	mux := http.NewServeMux()
 
@@ -78,7 +86,22 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool, latitude, longitude st
 			Location json.RawMessage `json:"location"`
 		}
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		if latitude == "" && longitude == "" {
+		if mode == config.LocationWander || mode == config.LocationRoute {
+			var got *otaclient.Location
+			if assert.NoError(t, json.Unmarshal(req.Location, &got)) && assert.NotNil(t, got) {
+				if mode == config.LocationWander {
+					assert.InDelta(t, 35.18, got.Latitude, 0.02)
+					assert.InDelta(t, 129.07, got.Longitude, 0.02)
+				} else {
+					// car-0001은 전체 경로의 약 41%인 대전 부근에서 출발한다.
+					assert.InDelta(t, 36.35, got.Latitude, 0.02)
+					assert.InDelta(t, 127.38, got.Longitude, 0.02)
+				}
+				if previous := lastLocation.Swap(got); previous != nil {
+					assert.NotEqual(t, *previous, *got)
+				}
+			}
+		} else if latitude == "" && longitude == "" {
 			assert.Nil(t, req.Location)
 		} else {
 			assert.JSONEq(t, `{"latitude":`+latitude+`,"longitude":`+longitude+`}`, string(req.Location))
@@ -137,6 +160,9 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool, latitude, longitude st
 	t.Setenv("INITIAL_VERSION", "1.0.0")
 	t.Setenv("LATITUDE", latitude)
 	t.Setenv("LONGITUDE", longitude)
+	t.Setenv("LOCATION_MODE", string(mode))
+	t.Setenv("WANDER_RADIUS_KM", "")
+	t.Setenv("ROUTE_SPEED_KMH", "")
 
 	runAgent := run
 	var verifyCalls int

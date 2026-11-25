@@ -14,6 +14,20 @@ import (
 
 var vehicleIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
+// LocationMode는 체크인에서 보고할 위치를 계산하는 방식이다.
+type LocationMode string
+
+const (
+	LocationFixed  LocationMode = "fixed"
+	LocationWander LocationMode = "wander"
+	LocationRoute  LocationMode = "route"
+)
+
+const (
+	defaultWanderRadiusKM = 1.0
+	defaultRouteSpeedKMH  = 90.0
+)
+
 // Config는 차량 에이전트의 검증된 시작 구성을 보유합니다.
 type Config struct {
 	VehicleID       string
@@ -26,6 +40,9 @@ type Config struct {
 	DataDir         string
 	InitialVersion  string
 	Location        *location.Coordinates
+	LocationMode    LocationMode
+	WanderRadiusKM  float64
+	RouteSpeedKMH   float64
 }
 
 // LoadFromEnv는 환경 변수를 읽고 Config를 반환합니다.
@@ -92,7 +109,7 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
-	return Config{
+	cfg := Config{
 		VehicleID:       vehicleID,
 		VehicleModel:    vehicleModel,
 		HWVersion:       hwVersion,
@@ -103,7 +120,52 @@ func Load(getenv func(string) string) (Config, error) {
 		DataDir:         dataDir,
 		InitialVersion:  initialVersion,
 		Location:        coordinates,
-	}, nil
+	}
+	if err := cfg.loadLocationMode(getenv); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) loadLocationMode(getenv func(string) string) error {
+	c.LocationMode = LocationMode(getenv("LOCATION_MODE"))
+	switch c.LocationMode {
+	case "", LocationFixed:
+		c.LocationMode = LocationFixed
+	case LocationWander:
+		if c.Location == nil {
+			return fmt.Errorf("LOCATION_MODE wander requires LATITUDE and LONGITUDE")
+		}
+		radius, err := loadPositiveFloat(getenv, "WANDER_RADIUS_KM", defaultWanderRadiusKM)
+		if err != nil {
+			return err
+		}
+		c.WanderRadiusKM = radius
+	case LocationRoute:
+		speed, err := loadPositiveFloat(getenv, "ROUTE_SPEED_KMH", defaultRouteSpeedKMH)
+		if err != nil {
+			return err
+		}
+		c.RouteSpeedKMH = speed
+	default:
+		return fmt.Errorf("LOCATION_MODE %q: must be fixed, wander, or route", c.LocationMode)
+	}
+	return nil
+}
+
+func loadPositiveFloat(getenv func(string) string, key string, fallback float64) (float64, error) {
+	raw := getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%s must be finite and positive", key)
+	}
+	return value, nil
 }
 
 func loadLocation(getenv func(string) string) (*location.Coordinates, error) {
