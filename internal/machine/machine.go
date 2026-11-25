@@ -18,6 +18,7 @@ import (
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/location"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
 )
@@ -37,6 +38,11 @@ type OTAClient interface {
 	Register(ctx context.Context, enrollmentKey string, req otaclient.RegisterRequest) (otaclient.RegisterResponse, error)
 	CheckIn(ctx context.Context, vehicleID, vehicleToken string, req otaclient.CheckInRequest) (otaclient.CheckInResponse, error)
 	GetManifest(ctx context.Context, vehicleID string, campaignID int64, vehicleToken string) (otaclient.Manifest, error)
+}
+
+// Locator는 주어진 시각에 보고할 차량 위치를 제공한다.
+type Locator interface {
+	Locate(now time.Time) (location.Coordinates, bool)
 }
 
 // Downloader는 상태 머신이 호출하는 downloader.Downloader의 메서드 집합이다.
@@ -79,6 +85,7 @@ type Machine struct {
 	enrollmentKey string
 
 	checkInInterval time.Duration
+	locator         Locator
 
 	vehicleToken         string
 	snap                 state.Snapshot
@@ -93,6 +100,13 @@ type Option func(*Machine)
 func WithCheckInInterval(d time.Duration) Option {
 	return func(m *Machine) {
 		m.checkInInterval = d
+	}
+}
+
+// WithLocator는 체크인에서 사용할 위치 공급자를 지정한다.
+func WithLocator(locator Locator) Option {
+	return func(m *Machine) {
+		m.locator = locator
 	}
 }
 
@@ -513,13 +527,23 @@ func (m *Machine) callWithReregister(ctx context.Context, call func() error) err
 }
 
 func (m *Machine) checkIn(ctx context.Context) (otaclient.CheckInResponse, error) {
+	req := otaclient.CheckInRequest{
+		CurrentVersion: m.snap.CurrentVersion,
+		LastUpdate:     toAPILastUpdate(m.snap.LastUpdate),
+	}
+	if m.locator != nil {
+		if coordinates, ok := m.locator.Locate(time.Now()); ok {
+			req.Location = &otaclient.Location{
+				Latitude:  coordinates.Latitude,
+				Longitude: coordinates.Longitude,
+			}
+		}
+	}
+
 	var resp otaclient.CheckInResponse
 	err := m.callWithReregister(ctx, func() error {
 		var innerErr error
-		resp, innerErr = m.ota.CheckIn(ctx, m.identity.VehicleID, m.vehicleToken, otaclient.CheckInRequest{
-			CurrentVersion: m.snap.CurrentVersion,
-			LastUpdate:     toAPILastUpdate(m.snap.LastUpdate),
-		})
+		resp, innerErr = m.ota.CheckIn(ctx, m.identity.VehicleID, m.vehicleToken, req)
 		return innerErr
 	})
 	return resp, err

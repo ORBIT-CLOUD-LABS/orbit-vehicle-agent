@@ -19,6 +19,7 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/location"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/machine"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
@@ -92,8 +93,11 @@ func assemble(cfg config.Config, logger *zap.Logger, verifier machine.SignatureV
 		Region:    cfg.Region,
 	}
 
-	return machine.New(ota, dl, inst, store, verifier, logger, identity, cfg.EnrollmentKey,
-		machine.WithCheckInInterval(cfg.CheckInInterval))
+	opts := []machine.Option{machine.WithCheckInInterval(cfg.CheckInInterval)}
+	if cfg.Location != nil {
+		opts = append(opts, machine.WithLocator(location.NewFixed(*cfg.Location)))
+	}
+	return machine.New(ota, dl, inst, store, verifier, logger, identity, cfg.EnrollmentKey, opts...)
 }
 
 const (
