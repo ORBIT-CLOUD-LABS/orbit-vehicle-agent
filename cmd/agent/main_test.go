@@ -93,8 +93,9 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool, mode config.LocationMo
 					assert.InDelta(t, 35.18, got.Latitude, 0.02)
 					assert.InDelta(t, 129.07, got.Longitude, 0.02)
 				} else {
-					assert.InDelta(t, 37.56, got.Latitude, 0.02)
-					assert.InDelta(t, 126.97, got.Longitude, 0.02)
+					// car-0001은 전체 경로의 약 41%인 대전 부근에서 출발한다.
+					assert.InDelta(t, 36.35, got.Latitude, 0.02)
+					assert.InDelta(t, 127.38, got.Longitude, 0.02)
 				}
 				if previous := lastLocation.Swap(got); previous != nil {
 					assert.NotEqual(t, *previous, *got)

@@ -2,6 +2,8 @@ package location
 
 import "time"
 
+const maxRouteStartFraction = 0.7
+
 type routeSegment struct {
 	from, to Coordinates
 	lengthKM float64
@@ -17,7 +19,7 @@ type Route struct {
 	startedAt     time.Time
 }
 
-// NewRoute는 차량마다 첫 경유지 주변에서 출발 위치가 다르도록 한다.
+// NewRoute는 차량 ID를 기준으로 경로 길이의 처음 70% 안에 출발 위치를 분산한다.
 func NewRoute(waypoints []Coordinates, speedKMH float64, vehicleID string, startedAt time.Time) Route {
 	route := Route{speedKMH: speedKMH, startedAt: startedAt}
 	if len(waypoints) == 0 {
@@ -25,16 +27,16 @@ func NewRoute(waypoints []Coordinates, speedKMH float64, vehicleID string, start
 	}
 	route.hasWaypoints = true
 	route.destination = waypoints[len(waypoints)-1]
+	var totalLengthKM float64
 	for i := 1; i < len(waypoints); i++ {
 		from, to := waypoints[i-1], waypoints[i]
 		length := distanceKM(from, to)
 		if length > 0 {
 			route.segments = append(route.segments, routeSegment{from: from, to: to, lengthKM: length})
+			totalLengthKM += length
 		}
 	}
-	if len(route.segments) > 0 {
-		route.startOffsetKM = vehicleFraction(vehicleID) * min(1, route.segments[0].lengthKM/2)
-	}
+	route.startOffsetKM = vehicleFraction(vehicleID) * maxRouteStartFraction * totalLengthKM
 	return route
 }
 
