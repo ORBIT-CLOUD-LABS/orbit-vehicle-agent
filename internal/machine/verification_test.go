@@ -164,8 +164,21 @@ func TestMachine_Run_ChecksVersionBeforeInstall(t *testing.T) {
 					require.NoError(t, store.Save(ctx, snap))
 					inst := &fakeInstaller{}
 					verifier := &fakeSignatureVerifier{err: tt.verifyErr}
-					m := machine.New(ota, dl, inst, store, verifier, nil, testIdentity, "enroll-key", fastCheckIn)
+					core, logs := observer.New(zap.InfoLevel)
+					m := machine.New(ota, dl, inst, store, verifier, zap.New(core), testIdentity, "enroll-key", fastCheckIn)
 					require.ErrorIs(t, runMachine(t, m, ctx, tt.current), context.Canceled)
+
+					skips := logs.FilterMessage("skipping firmware installation because target version matches current version").All()
+					if !tt.wantInstall && tt.wantFailure == "" {
+						require.Len(t, skips, 1)
+						assert.Equal(t, zap.InfoLevel, skips[0].Level)
+						fields := skips[0].ContextMap()
+						assert.Equal(t, campaignID, fields["campaign_id"])
+						assert.Equal(t, tt.current, fields["current_version"])
+						assert.Equal(t, tt.target, fields["target_version"])
+					} else {
+						assert.Empty(t, skips)
+					}
 
 					require.Len(t, ota.checkInCalls, reportIndex+1)
 					report := ota.checkInCalls[reportIndex]

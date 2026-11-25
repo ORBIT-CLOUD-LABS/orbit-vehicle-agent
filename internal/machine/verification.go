@@ -9,6 +9,8 @@ import (
 	"maps"
 	"os"
 
+	"go.uber.org/zap"
+
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
 )
@@ -51,6 +53,11 @@ func (m *Machine) canInstallVersion(ctx context.Context, pending *state.PendingU
 		detail := fmt.Sprintf("target version %q is lower than current version %q", pending.TargetVersion, m.snap.CurrentVersion)
 		m.recordFailure(ctx, pending.CampaignID, pending.EdgeID, state.FailureDowngradeRejected, detail)
 	case comparison == 0:
+		m.logger.Info("skipping firmware installation because target version matches current version",
+			zap.Int64("campaign_id", pending.CampaignID),
+			zap.String("current_version", m.snap.CurrentVersion),
+			zap.String("target_version", pending.TargetVersion),
+		)
 		m.backToIdle(ctx)
 	default:
 		return true

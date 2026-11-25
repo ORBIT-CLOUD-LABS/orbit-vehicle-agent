@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// compareVersions uses the numeric segments accepted by the server's DottedVersion.
+// compareVersions는 서버의 DottedVersion과 같은 규칙으로 버전의 숫자 자리를 비교한다.
 func compareVersions(target, current string) (int, error) {
 	targetSegments, err := parseVersion(target)
 	if err != nil {
@@ -36,7 +36,7 @@ func parseVersion(version string) ([]int, error) {
 		segments = append(segments, segment)
 	}
 
-	// The server treats missing segments as zero.
+	// 서버는 뒤에 생략된 자리를 0으로 본다.
 	for len(segments) > 1 && segments[len(segments)-1] == 0 {
 		segments = segments[:len(segments)-1]
 	}
