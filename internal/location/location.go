@@ -1,7 +1,23 @@
-// Package location은 차량 위치와 고정 위치 공급자를 제공한다.
+// Package location은 차량 위치와 위치 공급자를 제공한다.
 package location
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"math"
+	"time"
+)
+
+const (
+	earthRadiusKM    = 6371.0
+	radiansPerDegree = math.Pi / 180
+)
+
+// vehicleFraction은 차량 ID를 고정된 [0, 1) 구간 값으로 바꾼다.
+func vehicleFraction(vehicleID string) float64 {
+	hash := sha256.Sum256([]byte(vehicleID))
+	return float64(binary.BigEndian.Uint64(hash[:8])>>11) / (1 << 53)
+}
 
 // Coordinates는 차량의 위도와 경도다.
 type Coordinates struct {
