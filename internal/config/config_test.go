@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/config"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/location"
 )
 
 func validEnv() map[string]string {
@@ -147,6 +148,46 @@ func TestLoad_InvalidCheckInInterval(t *testing.T) {
 			_, err := config.Load(getenvFunc(env))
 
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestLoad_Location(t *testing.T) {
+	tests := []struct {
+		name      string
+		latitude  string
+		longitude string
+		want      *location.Coordinates
+		wantError string
+	}{
+		{name: "미설정"},
+		{name: "고정 위치", latitude: "37.5665", longitude: "126.978", want: &location.Coordinates{Latitude: 37.5665, Longitude: 126.978}},
+		{name: "좌표가 모두 0", latitude: "0", longitude: "0", want: &location.Coordinates{}},
+		{name: "최솟값", latitude: "-90", longitude: "-180", want: &location.Coordinates{Latitude: -90, Longitude: -180}},
+		{name: "최댓값", latitude: "90", longitude: "180", want: &location.Coordinates{Latitude: 90, Longitude: 180}},
+		{name: "위도 누락", longitude: "0", wantError: "LATITUDE and LONGITUDE"},
+		{name: "경도 누락", latitude: "0", wantError: "LATITUDE and LONGITUDE"},
+		{name: "위도 범위 초과", latitude: "90.01", longitude: "0", wantError: "LATITUDE"},
+		{name: "경도 범위 초과", latitude: "0", longitude: "-180.01", wantError: "LONGITUDE"},
+		{name: "숫자 아님", latitude: "0", longitude: "abc", wantError: "LONGITUDE"},
+		{name: "NaN", latitude: "NaN", longitude: "0", wantError: "LATITUDE"},
+		{name: "무한대", latitude: "0", longitude: "+Inf", wantError: "LONGITUDE"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := validEnv()
+			env["LATITUDE"] = tt.latitude
+			env["LONGITUDE"] = tt.longitude
+
+			cfg, err := config.Load(getenvFunc(env))
+
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Location)
 		})
 	}
 }

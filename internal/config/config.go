@@ -3,10 +3,13 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/location"
 )
 
 var vehicleIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
@@ -22,9 +25,10 @@ type Config struct {
 	CheckInInterval time.Duration
 	DataDir         string
 	InitialVersion  string
+	Location        *location.Coordinates
 }
 
-// LoadFromEnv는 환경 변수를 읽고 Config를 반환합니다. 
+// LoadFromEnv는 환경 변수를 읽고 Config를 반환합니다.
 // 필수 환경 변수가 없거나 잘못된 경우 오류를 반환합니다.
 
 func Load(getenv func(string) string) (Config, error) {
@@ -83,6 +87,11 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	coordinates, err := loadLocation(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		VehicleID:       vehicleID,
 		VehicleModel:    vehicleModel,
@@ -93,7 +102,40 @@ func Load(getenv func(string) string) (Config, error) {
 		CheckInInterval: checkInInterval,
 		DataDir:         dataDir,
 		InitialVersion:  initialVersion,
+		Location:        coordinates,
 	}, nil
+}
+
+func loadLocation(getenv func(string) string) (*location.Coordinates, error) {
+	latitude := getenv("LATITUDE")
+	longitude := getenv("LONGITUDE")
+	if latitude == "" && longitude == "" {
+		return nil, nil
+	}
+	if latitude == "" || longitude == "" {
+		return nil, fmt.Errorf("LATITUDE and LONGITUDE must be set together")
+	}
+
+	lat, err := parseCoordinate("LATITUDE", latitude, 90)
+	if err != nil {
+		return nil, err
+	}
+	lon, err := parseCoordinate("LONGITUDE", longitude, 180)
+	if err != nil {
+		return nil, err
+	}
+	return &location.Coordinates{Latitude: lat, Longitude: lon}, nil
+}
+
+func parseCoordinate(key, raw string, limit float64) (float64, error) {
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	if math.IsNaN(value) || value < -limit || value > limit {
+		return 0, fmt.Errorf("%s must be between %g and %g", key, -limit, limit)
+	}
+	return value, nil
 }
 
 func requireEnv(getenv func(string) string, key string) (string, error) {
