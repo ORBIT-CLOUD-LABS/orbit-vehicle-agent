@@ -94,8 +94,25 @@ func assemble(cfg config.Config, logger *zap.Logger, verifier machine.SignatureV
 	}
 
 	opts := []machine.Option{machine.WithCheckInInterval(cfg.CheckInInterval)}
-	if cfg.Location != nil {
-		opts = append(opts, machine.WithLocator(location.NewFixed(*cfg.Location)))
+	var locator machine.Locator
+	switch cfg.LocationMode {
+	case config.LocationWander:
+		locator = location.NewWander(*cfg.Location, cfg.WanderRadiusKM, cfg.VehicleID, time.Now())
+	case config.LocationRoute:
+		// flow.md에 정의된 서울, 대전, 부산 Edge의 대표 좌표를 경유한다.
+		waypoints := []location.Coordinates{
+			{Latitude: 37.56, Longitude: 126.97},
+			{Latitude: 36.35, Longitude: 127.38},
+			{Latitude: 35.18, Longitude: 129.07},
+		}
+		locator = location.NewRoute(waypoints, cfg.RouteSpeedKMH, cfg.VehicleID, time.Now())
+	default:
+		if cfg.Location != nil {
+			locator = location.NewFixed(*cfg.Location)
+		}
+	}
+	if locator != nil {
+		opts = append(opts, machine.WithLocator(locator))
 	}
 	return machine.New(ota, dl, inst, store, verifier, logger, identity, cfg.EnrollmentKey, opts...)
 }

@@ -192,6 +192,49 @@ func TestLoad_Location(t *testing.T) {
 	}
 }
 
+func TestLoad_LocationMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        map[string]string
+		wantMode   config.LocationMode
+		wantRadius float64
+		wantSpeed  float64
+		wantError  string
+	}{
+		{name: "default mode", wantMode: config.LocationFixed},
+		{name: "explicit fixed", env: map[string]string{"LOCATION_MODE": "fixed"}, wantMode: config.LocationFixed},
+		{name: "unknown mode", env: map[string]string{"LOCATION_MODE": "moving"}, wantError: "LOCATION_MODE"},
+		{name: "wander without center", env: map[string]string{"LOCATION_MODE": "wander"}, wantError: "LATITUDE and LONGITUDE"},
+		{name: "wander default", env: map[string]string{"LOCATION_MODE": "wander", "LATITUDE": "0", "LONGITUDE": "0"}, wantMode: config.LocationWander, wantRadius: 1},
+		{name: "wander custom", env: map[string]string{"LOCATION_MODE": "wander", "LATITUDE": "0", "LONGITUDE": "0", "WANDER_RADIUS_KM": "2.5"}, wantMode: config.LocationWander, wantRadius: 2.5},
+		{name: "non-finite radius", env: map[string]string{"LOCATION_MODE": "wander", "LATITUDE": "0", "LONGITUDE": "0", "WANDER_RADIUS_KM": "NaN"}, wantError: "WANDER_RADIUS_KM"},
+		{name: "route default", env: map[string]string{"LOCATION_MODE": "route"}, wantMode: config.LocationRoute, wantSpeed: 90},
+		{name: "route custom", env: map[string]string{"LOCATION_MODE": "route", "ROUTE_SPEED_KMH": "650.5"}, wantMode: config.LocationRoute, wantSpeed: 650.5},
+		{name: "zero speed", env: map[string]string{"LOCATION_MODE": "route", "ROUTE_SPEED_KMH": "0"}, wantError: "ROUTE_SPEED_KMH"},
+		{name: "negative speed", env: map[string]string{"LOCATION_MODE": "route", "ROUTE_SPEED_KMH": "-1"}, wantError: "ROUTE_SPEED_KMH"},
+		{name: "infinite speed", env: map[string]string{"LOCATION_MODE": "route", "ROUTE_SPEED_KMH": "+Inf"}, wantError: "ROUTE_SPEED_KMH"},
+		{name: "malformed speed", env: map[string]string{"LOCATION_MODE": "route", "ROUTE_SPEED_KMH": "fast"}, wantError: "ROUTE_SPEED_KMH"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := validEnv()
+			for key, value := range tt.env {
+				env[key] = value
+			}
+
+			cfg, err := config.Load(getenvFunc(env))
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMode, cfg.LocationMode)
+			assert.Equal(t, tt.wantRadius, cfg.WanderRadiusKM)
+			assert.Equal(t, tt.wantSpeed, cfg.RouteSpeedKMH)
+		})
+	}
+}
+
 func generateString(r rune, length int) string {
 	runes := make([]rune, length)
 	for i := range runes {
