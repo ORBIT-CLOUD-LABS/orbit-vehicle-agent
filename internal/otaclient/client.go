@@ -73,7 +73,8 @@ type RegisterResponse struct {
 	VehicleToken string `json:"vehicleToken"`
 }
 
-// OTA 서버는 차량이 마지막으로 시도한 업데이트의 결과를 보고하도록 요구합니다. LastUpdate는 CheckInRequest에 포함됩니다.
+// Register는 차량을 등록하거나 재등록하고 차량 토큰을 받습니다(VEHICLE-REQ-002).
+// 등록 키가 틀리면 CodeInvalidEnrollmentKey를 담은 *APIError를 반환하며, 호출자는 재시도하지 않고 시작 실패로 처리해야 합니다.
 func (c *Client) Register(ctx context.Context, enrollmentKey string, req RegisterRequest) (RegisterResponse, error) {
 	var resp RegisterResponse
 	if err := c.do(ctx, http.MethodPost, "/api/v1/vehicles/register", enrollmentKey, req, &resp); err != nil {
@@ -115,7 +116,6 @@ type CheckInResponse struct {
 
 // CheckIn은 현재 버전과, 있다면 차량 위치와 마지막 업데이트 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
 // 호출자는 CodeUnauthorized를 받으면 재등록 후 재시도하고, HTTP 500을 받으면 다음 체크인 주기에 재시도해야 합니다.
-
 func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, req CheckInRequest) (CheckInResponse, error) {
 	var resp CheckInResponse
 	path := fmt.Sprintf("/api/v1/vehicles/%s/check-in", url.PathEscape(vehicleID))
@@ -156,7 +156,6 @@ type FallbackURL struct {
 
 // GetManifest는 campaignID에 대한 다운로드 매니페스트를 가져옵니다.
 // 서버는 이 호출에서 대상 적격성을 다시 확인하므로, 호출자는 CodeNotUpdateTarget 및 CodeCampaignInactive를 "IDLE로 돌아가기"로 처리해야 하며 실패로 간주하지 않아야 합니다.
-
 func (c *Client) GetManifest(ctx context.Context, vehicleID string, campaignID int64, vehicleToken string) (Manifest, error) {
 	var resp Manifest
 	path := fmt.Sprintf("/api/v1/vehicles/%s/campaigns/%d/manifest", url.PathEscape(vehicleID), campaignID)

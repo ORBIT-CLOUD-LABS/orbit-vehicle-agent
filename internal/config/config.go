@@ -45,9 +45,8 @@ type Config struct {
 	RouteSpeedKMH   float64
 }
 
-// LoadFromEnv는 환경 변수를 읽고 Config를 반환합니다.
+// Load는 getenv로 환경 변수를 읽어 검증한 Config를 반환합니다.
 // 필수 환경 변수가 없거나 잘못된 경우 오류를 반환합니다.
-
 func Load(getenv func(string) string) (Config, error) {
 	vehicleID, err := requireEnv(getenv, "VEHICLE_ID")
 	if err != nil {

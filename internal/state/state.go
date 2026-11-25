@@ -99,8 +99,6 @@ func NewStore(dataDir, vehicleID string) *Store {
 
 // Load는 지속적인 Snapshot을 읽습니다. 아직 상태 파일이 없으면 StatusIdle에서 initialVersion으로 초기화하고 저장합니다.
 // Load는 Store의 구성된 차량 ID와 일치하지 않는 Snapshot을 반환하지 않습니다.
-// Save는 snap을 검증하고 원자적으로 저장합니다: DATA_DIR에 임시 파일을 쓰고 state.json 위로 이름을 바꿉니다.
-
 func (s *Store) Load(ctx context.Context, initialVersion string) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
@@ -138,7 +136,6 @@ func (s *Store) Load(ctx context.Context, initialVersion string) (Snapshot, erro
 }
 
 // Save는 snap을 검증하고 원자적으로 저장합니다: DATA_DIR에 임시 파일을 쓰고 state.json 위로 이름을 바꿉니다.
-
 func (s *Store) Save(ctx context.Context, snap Snapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err
