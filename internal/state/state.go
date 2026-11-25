@@ -208,7 +208,8 @@ func validatePendingUpdate(status Status, pending *PendingUpdate) error {
 	if pending.CampaignID <= 0 {
 		return fmt.Errorf("pending_update.campaign_id는 양수여야 합니다.")
 	}
-	if pending.TargetVersion == "" {
+	// 다운로드 중에는 매니페스트의 버전을 그대로 저장한다. 버전은 서명 검증 후에 판단한다.
+	if status == StatusInstalling && pending.TargetVersion == "" {
 		return fmt.Errorf("pending_update.target_version은 필수입니다.")
 	}
 	return nil
