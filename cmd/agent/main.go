@@ -17,6 +17,7 @@ import (
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/config"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/machine"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
@@ -42,6 +43,14 @@ func main() {
 // 반환하고, 그 밖의 에러는 에이전트가 시작하지 못했다는 뜻이다 (flow.md ③:
 // 등록 키가 틀리면 시작 실패로 끝난다).
 func run(ctx context.Context, logger *zap.Logger) error {
+	verifier, err := firmwaresignature.New()
+	if err != nil {
+		return fmt.Errorf("load firmware public keys: %w", err)
+	}
+	return runWithVerifier(ctx, logger, verifier)
+}
+
+func runWithVerifier(ctx context.Context, logger *zap.Logger, verifier machine.SignatureVerifier) error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -50,7 +59,7 @@ func run(ctx context.Context, logger *zap.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	m := assemble(cfg, logger)
+	m := assemble(cfg, logger, verifier)
 
 	logger.Info("agent starting",
 		zap.String("vehicle_id", cfg.VehicleID),
@@ -70,7 +79,7 @@ func run(ctx context.Context, logger *zap.Logger) error {
 
 // assemble은 에이전트의 구성요소를 연결한다. 저장된 차량 상태, OTA 서버
 // 클라이언트, 펌웨어 다운로더와 설치기, 그리고 이들을 구동하는 상태 머신이다.
-func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
+func assemble(cfg config.Config, logger *zap.Logger, verifier machine.SignatureVerifier) *machine.Machine {
 	store := state.NewStore(cfg.DataDir, cfg.VehicleID)
 	ota := otaclient.New(cfg.OTAServerURL, newOTAHTTPClient())
 	dl := downloader.New(cfg.DataDir, newCDNHTTPClient())
@@ -83,7 +92,7 @@ func assemble(cfg config.Config, logger *zap.Logger) *machine.Machine {
 		Region:    cfg.Region,
 	}
 
-	return machine.New(ota, dl, inst, store, logger, identity, cfg.EnrollmentKey,
+	return machine.New(ota, dl, inst, store, verifier, logger, identity, cfg.EnrollmentKey,
 		machine.WithCheckInInterval(cfg.CheckInInterval))
 }
 

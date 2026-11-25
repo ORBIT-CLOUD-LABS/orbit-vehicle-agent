@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"time"
@@ -71,6 +72,7 @@ type Machine struct {
 	downloader Downloader
 	installer  Installer
 	store      StateStore
+	verifier   SignatureVerifier
 	logger     *zap.Logger
 
 	identity      VehicleIdentity
@@ -78,8 +80,9 @@ type Machine struct {
 
 	checkInInterval time.Duration
 
-	vehicleToken string
-	snap         state.Snapshot
+	vehicleToken         string
+	snap                 state.Snapshot
+	loggedSignatureSkips map[int64]struct{}
 }
 
 // Option은 Machine 설정을 바꾼다.
@@ -96,7 +99,7 @@ func WithCheckInInterval(d time.Duration) Option {
 // New는 Machine을 만든다. identity와 enrollmentKey는 (재)등록에 쓰고, 등록으로
 // 받은 차량 토큰은 메모리에만 두며 저장하지 않는다. logger가 nil이면 아무것도
 // 하지 않는 로거를 쓴다.
-func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string, opts ...Option) *Machine {
+func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, verifier SignatureVerifier, logger *zap.Logger, identity VehicleIdentity, enrollmentKey string, opts ...Option) *Machine {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -105,6 +108,7 @@ func New(ota OTAClient, dl Downloader, inst Installer, store StateStore, logger 
 		downloader:      dl,
 		installer:       inst,
 		store:           store,
+		verifier:        verifier,
 		logger:          logger,
 		identity:        identity,
 		enrollmentKey:   enrollmentKey,
@@ -131,6 +135,7 @@ func (m *Machine) Run(ctx context.Context, initialVersion string) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 	m.snap = snap
+	m.loggedSignatureSkips = make(map[int64]struct{})
 
 	if err := m.register(ctx); err != nil {
 		return fmt.Errorf("register vehicle: %w", err)
@@ -196,6 +201,18 @@ func (m *Machine) tick(ctx context.Context) time.Duration {
 // 실패는 결과로 기록하고 IDLE로 돌아간다. 일시적 실패는 상태를 바꾸지 않아
 // 다음 체크인 주기에 처음부터 다시 시도한다.
 func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
+	if rejection, rejected := m.snap.SignatureRejections[campaignID]; rejected &&
+		(rejection.MissingKeyID == "" || !m.verifier.HasKey(rejection.MissingKeyID)) {
+		if _, logged := m.loggedSignatureSkips[campaignID]; !logged {
+			m.logger.Info("skipping campaign after firmware signature rejection",
+				zap.Int64("campaign_id", campaignID),
+				zap.String("failure_reason", string(state.FailureSignatureInvalid)),
+				zap.String("missing_key_id", rejection.MissingKeyID),
+			)
+			m.loggedSignatureSkips[campaignID] = struct{}{}
+		}
+		return
+	}
 	manifest, outcome, err := m.fetchManifest(ctx, campaignID)
 	switch outcome {
 	case manifestNotTarget:
@@ -231,23 +248,28 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 		CampaignID:    manifest.CampaignID,
 		TargetVersion: manifest.TargetVersion,
 		EdgeID:        result.edgeID,
+		Verification: &state.FirmwareVerification{
+			Size:      result.Size,
+			SHA256:    result.SHA256,
+			Signature: manifest.Signature,
+			KeyID:     manifest.KeyID,
+		},
+	}
+	if !m.verifySignature(ctx, pending, result.Size, result.SHA256) {
+		return
 	}
 	installing := m.snap
 	installing.Status = state.StatusInstalling
 	installing.PendingUpdate = pending
+	if _, rejected := installing.SignatureRejections[campaignID]; rejected {
+		installing.SignatureRejections = maps.Clone(installing.SignatureRejections)
+		delete(installing.SignatureRejections, campaignID)
+	}
 	if !m.save(ctx, installing) {
 		return
 	}
 
-	m.finishInstall(ctx, pending, result.path)
-}
-
-// resumeInstall은 다운로드를 마친 뒤 설치 중에 재시작으로 중단된 업데이트의
-// Install을 다시 실행한다 (이슈 #12: "INSTALLING은 설치 재수행").
-func (m *Machine) resumeInstall(ctx context.Context) {
-	pending := m.snap.PendingUpdate
-	sourcePath := m.downloader.Path(pending.CampaignID)
-	m.finishInstall(ctx, pending, sourcePath)
+	m.finishInstall(ctx, pending, result.Path)
 }
 
 func (m *Machine) finishInstall(ctx context.Context, pending *state.PendingUpdate, sourcePath string) {
@@ -270,7 +292,7 @@ var (
 )
 
 type edgeDownloadResult struct {
-	path   string
+	downloader.Result
 	edgeID string
 }
 
@@ -321,7 +343,7 @@ func (m *Machine) downloadFromEdges(ctx context.Context, manifest *otaclient.Man
 		result, err := m.downloadFromEdge(ctx, manifest, edge.url)
 		// 해시가 달라도 이 Edge에서 파일을 받은 사실은 보고한다.
 		if err == nil || downloadFailureReason(err) == state.FailureHashMismatch {
-			return edgeDownloadResult{path: result.Path, edgeID: edge.edgeID}, err
+			return edgeDownloadResult{Result: result, edgeID: edge.edgeID}, err
 		}
 		if ctx.Err() != nil || !canSwitchEdge(err) {
 			return edgeDownloadResult{}, err
@@ -399,35 +421,36 @@ func (m *Machine) fetchManifest(ctx context.Context, campaignID int64) (otaclien
 // recordFailure는 실패한 업데이트 결과를 저장하고 IDLE로 돌아가, 다음
 // 체크인에서 실패를 보고할 수 있게 한다.
 func (m *Machine) recordFailure(ctx context.Context, campaignID int64, edgeID string, reason state.FailureReason, detail string) {
-	next := state.Snapshot{
-		VehicleID:      m.snap.VehicleID,
-		Status:         state.StatusIdle,
-		CurrentVersion: m.snap.CurrentVersion,
-		LastUpdate: &state.LastUpdate{
-			CampaignID:    campaignID,
-			Result:        state.ResultFailed,
-			FailureReason: reason,
-			FailureDetail: detail,
-			EdgeID:        edgeID,
-			FinishedAt:    time.Now(),
-		},
+	m.save(ctx, m.failedUpdate(campaignID, edgeID, reason, detail))
+}
+
+func (m *Machine) failedUpdate(campaignID int64, edgeID string, reason state.FailureReason, detail string) state.Snapshot {
+	next := m.snap
+	next.Status = state.StatusIdle
+	next.PendingUpdate = nil
+	next.LastUpdate = &state.LastUpdate{
+		CampaignID:    campaignID,
+		Result:        state.ResultFailed,
+		FailureReason: reason,
+		FailureDetail: detail,
+		EdgeID:        edgeID,
+		FinishedAt:    time.Now(),
 	}
-	m.save(ctx, next)
+	return next
 }
 
 // recordSuccess는 성공한 업데이트 결과를 저장하고 새 버전의 IDLE로 돌아가,
 // 다음 체크인에서 성공을 보고할 수 있게 한다.
 func (m *Machine) recordSuccess(ctx context.Context, pending *state.PendingUpdate) {
-	next := state.Snapshot{
-		VehicleID:      m.snap.VehicleID,
-		Status:         state.StatusIdle,
-		CurrentVersion: pending.TargetVersion,
-		LastUpdate: &state.LastUpdate{
-			CampaignID: pending.CampaignID,
-			Result:     state.ResultSucceeded,
-			EdgeID:     pending.EdgeID,
-			FinishedAt: time.Now(),
-		},
+	next := m.snap
+	next.Status = state.StatusIdle
+	next.CurrentVersion = pending.TargetVersion
+	next.PendingUpdate = nil
+	next.LastUpdate = &state.LastUpdate{
+		CampaignID: pending.CampaignID,
+		Result:     state.ResultSucceeded,
+		EdgeID:     pending.EdgeID,
+		FinishedAt: time.Now(),
 	}
 	m.save(ctx, next)
 }

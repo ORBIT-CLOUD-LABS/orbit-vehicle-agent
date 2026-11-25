@@ -209,7 +209,7 @@ func TestMachine_Run_DownloadEdgePolicy(t *testing.T) {
 			}
 			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
 			inst := &fakeInstaller{errs: []error{tt.installErr}}
-			m := machine.New(ota, downloader.New(t.TempDir(), client), inst, store, nil, testIdentity, "enroll-key", fastCheckIn)
+			m := machine.New(ota, downloader.New(t.TempDir(), client), inst, store, &fakeSignatureVerifier{}, nil, testIdentity, "enroll-key", fastCheckIn)
 
 			require.ErrorIs(t, runMachine(t, m, ctx, "1.0.0"), context.Canceled)
 

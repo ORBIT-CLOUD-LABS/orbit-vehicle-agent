@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
@@ -91,6 +92,27 @@ func (f *fakeDownloader) Path(campaignID int64) string {
 		return f.path
 	}
 	return "/data/downloads/" + strconv.FormatInt(campaignID, 10) + ".bin"
+}
+
+type signatureCall struct {
+	keyID     string
+	signature string
+	metadata  firmwaresignature.Metadata
+}
+
+type fakeSignatureVerifier struct {
+	err        error
+	calls      []signatureCall
+	knownKeyID string
+}
+
+func (f *fakeSignatureVerifier) HasKey(keyID string) bool {
+	return keyID != "" && keyID == f.knownKeyID
+}
+
+func (f *fakeSignatureVerifier) Verify(keyID, signature string, metadata firmwaresignature.Metadata) error {
+	f.calls = append(f.calls, signatureCall{keyID: keyID, signature: signature, metadata: metadata})
+	return f.err
 }
 
 // fakeInstaller는 machine.Installer의 손으로 만든 테스트 대역이다.

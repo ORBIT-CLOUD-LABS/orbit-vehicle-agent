@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/machine"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
@@ -63,7 +64,7 @@ func TestMachine_Run_RegistersThenLoopsCheckInsWithToken(t *testing.T) {
 		}
 	}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -99,7 +100,7 @@ func TestMachine_Run_ClearsLastUpdateAfterSuccessfulCheckIn(t *testing.T) {
 			FinishedAt: time.Now().Add(-time.Minute),
 		},
 	}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -133,7 +134,7 @@ func TestMachine_Run_SuccessfulUpdateFlow(t *testing.T) {
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -171,7 +172,7 @@ func TestMachine_Run_DownloadFailure_RecordsDownloadFailed(t *testing.T) {
 	dl := &fakeDownloader{errs: []error{&downloader.Error{Reason: downloader.FailureDownloadFailed, Err: errBoom}}}
 	inst := &fakeInstaller{}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -200,7 +201,7 @@ func TestMachine_Run_HashMismatch_RecordsHashMismatch(t *testing.T) {
 
 	dl := &fakeDownloader{errs: []error{&downloader.Error{Reason: downloader.FailureHashMismatch, Err: errBoom}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -226,7 +227,7 @@ func TestMachine_Run_InstallFailure_RecordsInstallFailed(t *testing.T) {
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{errs: []error{&installer.Error{Reason: installer.FailureInstallFailed, Err: errBoom}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -264,7 +265,7 @@ func TestMachine_Run_ManifestNotTarget_GoesIdleWithoutFailureResult(t *testing.T
 			dl := &fakeDownloader{}
 			inst := &fakeInstaller{}
 			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-			m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+			m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 			err := runMachine(t, m, ctx, "1.0.0")
 			require.ErrorIs(t, err, context.Canceled)
@@ -293,7 +294,7 @@ func TestMachine_Run_ManifestTransientError_LeavesStateUnchangedForNextCycle(t *
 	ota.onCheckIn = func(int) { cancel() }
 
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -311,31 +312,39 @@ func TestMachine_Run_CDNRejectsURL_RefetchesManifestAndRetriesDownload(t *testin
 		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: 1, NextCheckInSeconds: 0}},
 		manifestResponses: []otaclient.Manifest{
 			{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/old"},
-			{CampaignID: 1, TargetVersion: "1.1.0", FileSize: 10, SHA256: "abc", DownloadURL: "https://cdn.example/new"},
+			{CampaignID: 1, TargetVersion: "1.2.0", FileSize: 12, SHA256: "ABC", DownloadURL: "https://cdn.example/new", KeyID: "v2", Signature: "fresh-signature"},
 		},
 	}
 	ota.onCheckIn = func(int) { cancel() }
 
 	dl := &fakeDownloader{
 		errs:    []error{downloader.ErrManifestExpired, nil},
-		results: []downloader.Result{{}, {Path: "/data/downloads/1.bin", Size: 10}},
+		results: []downloader.Result{{}, {Path: "/data/downloads/1.bin", Size: 12, SHA256: "abc"}},
 	}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	verifier := &fakeSignatureVerifier{}
+	m := machine.New(ota, dl, inst, store, verifier, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
 
 	require.Len(t, ota.manifestCalls, 2)
 	require.Len(t, dl.calls, 2)
+	assert.Equal(t, []signatureCall{{
+		keyID: "v2", signature: "fresh-signature",
+		metadata: firmwaresignature.Metadata{Model: testIdentity.Model, Version: "1.2.0", SHA256: "abc", Size: 12},
+	}}, verifier.calls)
+	require.Len(t, store.saves, 3)
+	require.NotNil(t, store.saves[1].PendingUpdate)
+	assert.Equal(t, &state.FirmwareVerification{Size: 12, SHA256: "abc", Signature: "fresh-signature", KeyID: "v2"}, store.saves[1].PendingUpdate.Verification)
 
 	final, ok := store.lastSave()
 	require.True(t, ok)
 	assert.Equal(t, state.StatusIdle, final.Status)
 	require.NotNil(t, final.LastUpdate)
 	assert.Equal(t, state.ResultSucceeded, final.LastUpdate.Result)
-	assert.Equal(t, "1.1.0", final.CurrentVersion)
+	assert.Equal(t, "1.2.0", final.CurrentVersion)
 }
 
 // 재시작 복구: DOWNLOADING 상태였으면 매니페스트를 다시 요청해 처음부터 다운로드한다.
@@ -358,7 +367,7 @@ func TestMachine_Run_RestartRecovery_Downloading_RefetchesManifestAndRestartsDow
 		CurrentVersion: "1.0.0",
 		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0"},
 	}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -373,43 +382,6 @@ func TestMachine_Run_RestartRecovery_Downloading_RefetchesManifestAndRestartsDow
 	require.NotNil(t, lastUpdate, "복구된 결과는 다음 체크인에 보고되어야 한다")
 	assert.Equal(t, "SUCCEEDED", lastUpdate.Result)
 	assert.Equal(t, int64(1), lastUpdate.CampaignID)
-}
-
-// 재시작 복구: INSTALLING 상태였으면 다시 다운로드하지 않고 설치만 재수행한다.
-func TestMachine_Run_RestartRecovery_Installing_ResumesInstallWithoutRedownload(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	ota := &fakeOTA{
-		registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}},
-		checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: false, NextCheckInSeconds: 0}},
-	}
-	ota.onCheckIn = func(int) { cancel() }
-
-	dl := &fakeDownloader{path: "/data/downloads/1.bin"}
-	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
-	dir := t.TempDir()
-	require.NoError(t, state.NewStore(dir, "v1").Save(ctx, state.Snapshot{
-		VehicleID:      "v1",
-		Status:         state.StatusInstalling,
-		CurrentVersion: "1.0.0",
-		PendingUpdate:  &state.PendingUpdate{CampaignID: 1, TargetVersion: "1.1.0", EdgeID: "edge-daejeon"},
-	}))
-	store := state.NewStore(dir, "v1")
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
-
-	err := runMachine(t, m, ctx, "1.0.0")
-	require.ErrorIs(t, err, context.Canceled)
-
-	assert.Empty(t, dl.calls, "INSTALLING 복구는 다시 다운로드하지 않아야 한다")
-	assert.Empty(t, ota.manifestCalls, "INSTALLING 복구는 매니페스트를 다시 요청하지 않아야 한다")
-	require.Equal(t, []string{"/data/downloads/1.bin"}, inst.calls)
-
-	require.GreaterOrEqual(t, len(ota.checkInCalls), 1)
-	lastUpdate := ota.checkInCalls[0].LastUpdate
-	require.NotNil(t, lastUpdate)
-	assert.Equal(t, "SUCCEEDED", lastUpdate.Result)
-	assert.Equal(t, "edge-daejeon", lastUpdate.EdgeID)
 }
 
 // VEHICLE-REQ-001: 체크인이 401이면 재등록 후 재개한다.
@@ -429,7 +401,7 @@ func TestMachine_Run_CheckInUnauthorized_ReregistersAndRetries(t *testing.T) {
 	}
 
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -460,7 +432,7 @@ func TestMachine_Run_GetManifestUnauthorized_ReregistersAndRetries(t *testing.T)
 	dl := &fakeDownloader{results: []downloader.Result{{Path: "/data/downloads/1.bin", Size: 10}}}
 	inst := &fakeInstaller{results: []installer.Result{{Path: "/data/firmware/current.bin"}}}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, dl, inst, store, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
+	m := machine.New(ota, dl, inst, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn)
 
 	err := runMachine(t, m, ctx, "1.0.0")
 	require.ErrorIs(t, err, context.Canceled)
@@ -482,7 +454,7 @@ func TestMachine_Run_InitialRegistrationFailure_ReturnsErrorWithoutRetry(t *test
 		registerErrs: []error{&otaclient.APIError{StatusCode: 401, Code: otaclient.CodeInvalidEnrollmentKey}},
 	}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "wrong-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "wrong-key")
 
 	err := runMachine(t, m, context.Background(), "1.0.0")
 	require.Error(t, err)
@@ -497,7 +469,7 @@ func TestMachine_Run_CheckInFailure_WaitsDefaultIntervalBeforeRetry(t *testing.T
 		checkInErrs:       []error{errBoom},
 	}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -527,7 +499,7 @@ func TestMachine_Run_NonPositiveNextCheckIn_WaitsDefaultInterval(t *testing.T) {
 				checkInResponses:  []otaclient.CheckInResponse{{UpdateTarget: false, NextCheckInSeconds: tt.seconds}},
 			}
 			store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-			m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key")
+			m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key")
 
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
@@ -555,7 +527,7 @@ func TestMachine_Run_WithCheckInInterval_OverridesDefaultInterval(t *testing.T) 
 		}
 	}
 	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
-	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, zap.NewNop(), testIdentity, "enroll-key",
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key",
 		machine.WithCheckInInterval(time.Millisecond))
 
 	err := runMachine(t, m, ctx, "1.0.0")
