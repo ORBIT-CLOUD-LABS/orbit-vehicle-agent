@@ -51,7 +51,3 @@ func (w Wander) Locate(at time.Time) (Coordinates, bool) {
 		Longitude: wrapLongitude(w.center.Longitude + math.Atan2(y, x)/radiansPerDegree),
 	}, true
 }
-
-func wrapLongitude(longitude float64) float64 {
-	return math.Remainder(longitude, 360)
-}

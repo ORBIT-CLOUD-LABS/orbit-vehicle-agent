@@ -25,6 +25,19 @@ type Coordinates struct {
 	Longitude float64
 }
 
+func distanceKM(a, b Coordinates) float64 {
+	latDelta := (b.Latitude - a.Latitude) * radiansPerDegree
+	lonDelta := wrapLongitude(b.Longitude-a.Longitude) * radiansPerDegree
+	latSin := math.Sin(latDelta / 2)
+	lonSin := math.Sin(lonDelta / 2)
+	h := latSin*latSin + math.Cos(a.Latitude*radiansPerDegree)*math.Cos(b.Latitude*radiansPerDegree)*lonSin*lonSin
+	return 2 * earthRadiusKM * math.Asin(math.Sqrt(min(h, 1)))
+}
+
+func wrapLongitude(longitude float64) float64 {
+	return math.Remainder(longitude, 360)
+}
+
 // Fixed는 항상 같은 좌표를 반환하는 위치 공급자다.
 type Fixed struct {
 	coordinates Coordinates

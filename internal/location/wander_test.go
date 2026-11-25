@@ -19,13 +19,13 @@ func TestWander_Locate(t *testing.T) {
 	assert.Equal(t, first, beforeStart)
 	later, _ := wander.Locate(startedAt.Add(time.Minute))
 	assert.NotEqual(t, first, later)
-	assert.InDelta(t, wanderSpeedKMH/60, distanceFrom(first, later), 0.001)
+	assert.InDelta(t, wanderSpeedKMH/60, distanceKM(first, later), 0.001)
 
 	same, _ := NewWander(center, 1, "car-0001", startedAt).Locate(startedAt.Add(time.Minute))
 	other, _ := NewWander(center, 1, "car-0002", startedAt).Locate(startedAt.Add(time.Minute))
 	assert.Equal(t, later, same)
 	assert.NotEqual(t, later, other)
-	assert.NotEqual(t, distanceFrom(center, later), distanceFrom(center, other))
+	assert.NotEqual(t, distanceKM(center, later), distanceKM(center, other))
 }
 
 func TestWander_LocateStaysWithinRadius(t *testing.T) {
@@ -48,16 +48,8 @@ func TestWander_LocateStaysWithinRadius(t *testing.T) {
 				require.True(t, ok)
 				assert.LessOrEqual(t, math.Abs(got.Latitude), 90.0)
 				assert.LessOrEqual(t, math.Abs(got.Longitude), 180.0)
-				assert.LessOrEqual(t, distanceFrom(tt.center, got), float64(radiusKM))
+				assert.LessOrEqual(t, distanceKM(tt.center, got), float64(radiusKM))
 			}
 		})
 	}
-}
-
-func distanceFrom(a, b Coordinates) float64 {
-	latDelta := (b.Latitude - a.Latitude) * radiansPerDegree
-	lonDelta := (b.Longitude - a.Longitude) * radiansPerDegree
-	h := math.Pow(math.Sin(latDelta/2), 2) +
-		math.Cos(a.Latitude*radiansPerDegree)*math.Cos(b.Latitude*radiansPerDegree)*math.Pow(math.Sin(lonDelta/2), 2)
-	return 2 * earthRadiusKM * math.Asin(math.Sqrt(min(h, 1)))
 }
