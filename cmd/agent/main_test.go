@@ -30,11 +30,15 @@ import (
 // 알려 주는 체크인(④), 매니페스트 조회(⑤), 펌웨어 다운로드·검증(⑥),
 // 설치(⑦), 다음 체크인의 결과 보고(④). 서버가 결과를 확인하면 루프를 멈춘다.
 func TestRun_EndToEnd(t *testing.T) {
-	t.Run("verified firmware installs", func(t *testing.T) { testRunEndToEnd(t, true) })
-	t.Run("unknown key fails with embedded verifier", func(t *testing.T) { testRunEndToEnd(t, false) })
+	t.Run("verified firmware installs with configured location", func(t *testing.T) {
+		testRunEndToEnd(t, true, "37.5665", "126.978")
+	})
+	t.Run("unknown key fails with embedded verifier and no location", func(t *testing.T) {
+		testRunEndToEnd(t, false, "", "")
+	})
 }
 
-func testRunEndToEnd(t *testing.T, acceptsSignature bool) {
+func testRunEndToEnd(t *testing.T, acceptsSignature bool, latitude, longitude string) {
 	t.Helper()
 	const (
 		vehicleID        = "car-0001"
@@ -69,8 +73,16 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool) {
 	mux.HandleFunc("POST /api/v1/vehicles/"+vehicleID+"/check-in", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer tok-1", r.Header.Get("Authorization"))
 
-		var req otaclient.CheckInRequest
+		var req struct {
+			otaclient.CheckInRequest
+			Location json.RawMessage `json:"location"`
+		}
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if latitude == "" && longitude == "" {
+			assert.Nil(t, req.Location)
+		} else {
+			assert.JSONEq(t, `{"latitude":`+latitude+`,"longitude":`+longitude+`}`, string(req.Location))
+		}
 
 		switch checkInCalls.Add(1) {
 		case 1:
@@ -123,6 +135,8 @@ func testRunEndToEnd(t *testing.T, acceptsSignature bool) {
 	t.Setenv("CHECKIN_INTERVAL", "1")
 	t.Setenv("DATA_DIR", dataDir)
 	t.Setenv("INITIAL_VERSION", "1.0.0")
+	t.Setenv("LATITUDE", latitude)
+	t.Setenv("LONGITUDE", longitude)
 
 	runAgent := run
 	var verifyCalls int

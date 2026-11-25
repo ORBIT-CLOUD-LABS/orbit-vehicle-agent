@@ -198,6 +198,43 @@ func TestClient_CheckIn_LastUpdateEdgeID(t *testing.T) {
 	}
 }
 
+func TestClient_CheckIn_Location(t *testing.T) {
+	tests := []struct {
+		name     string
+		location *otaclient.Location
+		wantJSON string
+	}{
+		{name: "위치 있음", location: &otaclient.Location{Latitude: 37.5665, Longitude: 126.978}, wantJSON: `{"latitude":37.5665,"longitude":126.978}`},
+		{name: "좌표가 모두 0", location: &otaclient.Location{}, wantJSON: `{"latitude":0,"longitude":0}`},
+		{name: "위치 없음"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]json.RawMessage
+				if assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+					if tt.location == nil {
+						assert.NotContains(t, body, "location")
+					} else {
+						assert.JSONEq(t, tt.wantJSON, string(body["location"]))
+					}
+				}
+				writeAPIResponse(t, w, http.StatusOK, "OK", "요청에 성공했습니다.", otaclient.CheckInResponse{NextCheckInSeconds: 30})
+			}))
+			defer server.Close()
+
+			client := otaclient.New(server.URL, server.Client())
+			_, err := client.CheckIn(context.Background(), "car-0001", "vehicle-token", otaclient.CheckInRequest{
+				CurrentVersion: "1.0.0",
+				Location:       tt.location,
+			})
+
+			require.NoError(t, err)
+		})
+	}
+}
+
 // VEHICLE-REQ-001
 func TestClient_CheckIn_NoUpdateTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

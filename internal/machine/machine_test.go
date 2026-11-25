@@ -12,6 +12,7 @@ import (
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/downloader"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/installer"
+	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/location"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/machine"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/otaclient"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
@@ -77,6 +78,36 @@ func TestMachine_Run_RegistersThenLoopsCheckInsWithToken(t *testing.T) {
 	for _, token := range ota.checkInTokens {
 		assert.Equal(t, "tok-1", token)
 	}
+}
+
+type testLocator func(time.Time) (location.Coordinates, bool)
+
+func (locate testLocator) Locate(now time.Time) (location.Coordinates, bool) {
+	return locate(now)
+}
+
+func TestMachine_Run_OmitsLocationWhenItBecomesUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ota := &fakeOTA{registerResponses: []otaclient.RegisterResponse{{VehicleToken: "tok-1"}}}
+	ota.onCheckIn = func(call int) {
+		if call == 1 {
+			cancel()
+		}
+	}
+	store := &fakeStore{load: state.Snapshot{VehicleID: "v1", Status: state.StatusIdle, CurrentVersion: "1.0.0"}}
+	locator := testLocator(func(now time.Time) (location.Coordinates, bool) {
+		assert.False(t, now.IsZero())
+		return location.Coordinates{Latitude: 37.5665, Longitude: 126.978}, len(ota.checkInCalls) == 0
+	})
+	m := machine.New(ota, &fakeDownloader{}, &fakeInstaller{}, store, &fakeSignatureVerifier{}, zap.NewNop(), testIdentity, "enroll-key", fastCheckIn, machine.WithLocator(locator))
+
+	err := runMachine(t, m, ctx, "1.0.0")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, ota.checkInCalls, 2)
+	assert.Equal(t, &otaclient.Location{Latitude: 37.5665, Longitude: 126.978}, ota.checkInCalls[0].Location)
+	assert.Nil(t, ota.checkInCalls[1].Location)
 }
 
 // UPDATE-REQ-001: 체크인 200 OK 응답 후 보고했던 last_update를 지운다.

@@ -92,9 +92,17 @@ type LastUpdate struct {
 	FinishedAt    time.Time `json:"finishedAt"`
 }
 
-// CheckInRequest는 주기적인 체크인 요청 본문입니다(VEHICLE-REQ-001, UPDATE-REQ-001). LastUpdate는 보고할 결과가 없으면 nil입니다.
+// Location은 체크인에서 보고하는 차량의 위도와 경도입니다.
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+// CheckInRequest는 주기적인 체크인 요청 본문입니다(VEHICLE-REQ-001, UPDATE-REQ-001).
+// Location과 LastUpdate는 각각 보고할 위치와 업데이트 결과가 없으면 nil입니다.
 type CheckInRequest struct {
 	CurrentVersion string      `json:"currentVersion"`
+	Location       *Location   `json:"location,omitempty"`
 	LastUpdate     *LastUpdate `json:"lastUpdate"`
 }
 
@@ -105,7 +113,7 @@ type CheckInResponse struct {
 	NextCheckInSeconds int   `json:"nextCheckInSeconds"`
 }
 
-// CheckIn은 현재 버전과, 있다면 마지막 업데이트의 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
+// CheckIn은 현재 버전과, 있다면 차량 위치와 마지막 업데이트 결과를 보고하고, 차량이 지금 매니페스트를 가져와야 하는지 여부를 반환합니다.
 // 호출자는 CodeUnauthorized를 받으면 재등록 후 재시도하고, HTTP 500을 받으면 다음 체크인 주기에 재시도해야 합니다.
 
 func (c *Client) CheckIn(ctx context.Context, vehicleID, vehicleToken string, req CheckInRequest) (CheckInResponse, error) {
