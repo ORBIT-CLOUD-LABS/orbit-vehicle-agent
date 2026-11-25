@@ -258,6 +258,9 @@ func (m *Machine) performUpdate(ctx context.Context, campaignID int64) {
 	if !m.verifySignature(ctx, pending, result.Size, result.SHA256) {
 		return
 	}
+	if !m.canInstallVersion(ctx, pending) {
+		return
+	}
 	installing := m.snap
 	installing.Status = state.StatusInstalling
 	installing.PendingUpdate = pending

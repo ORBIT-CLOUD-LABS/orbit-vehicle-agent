@@ -9,6 +9,8 @@ import (
 	"maps"
 	"os"
 
+	"go.uber.org/zap"
+
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/firmwaresignature"
 	"github.com/ORBIT-CLOUD-LABS/orbit-vehicle-agent/internal/state"
 )
@@ -41,7 +43,29 @@ func (m *Machine) verifySignature(ctx context.Context, pending *state.PendingUpd
 	return true
 }
 
-// resumeInstall은 저장된 파일의 크기·해시·서명을 다시 확인한 뒤 설치를 재개한다.
+// canInstallVersion은 현재 버전보다 높은 펌웨어에만 설치를 허용한다.
+func (m *Machine) canInstallVersion(ctx context.Context, pending *state.PendingUpdate) bool {
+	comparison, err := compareVersions(pending.TargetVersion, m.snap.CurrentVersion)
+	switch {
+	case err != nil:
+		m.recordFailure(ctx, pending.CampaignID, pending.EdgeID, state.FailureDowngradeRejected, err.Error())
+	case comparison < 0:
+		detail := fmt.Sprintf("target version %q is lower than current version %q", pending.TargetVersion, m.snap.CurrentVersion)
+		m.recordFailure(ctx, pending.CampaignID, pending.EdgeID, state.FailureDowngradeRejected, detail)
+	case comparison == 0:
+		m.logger.Info("skipping firmware installation because target version matches current version",
+			zap.Int64("campaign_id", pending.CampaignID),
+			zap.String("current_version", m.snap.CurrentVersion),
+			zap.String("target_version", pending.TargetVersion),
+		)
+		m.backToIdle(ctx)
+	default:
+		return true
+	}
+	return false
+}
+
+// resumeInstall은 저장된 파일의 크기·해시·서명·버전을 다시 확인한 뒤 설치를 재개한다.
 func (m *Machine) resumeInstall(ctx context.Context) {
 	pending := m.snap.PendingUpdate
 	verification := pending.Verification
@@ -69,7 +93,7 @@ func (m *Machine) resumeInstall(ctx context.Context) {
 		m.recordFailure(ctx, pending.CampaignID, pending.EdgeID, state.FailureHashMismatch, detail)
 		return
 	}
-	if m.verifySignature(ctx, pending, size, hash) {
+	if m.verifySignature(ctx, pending, size, hash) && m.canInstallVersion(ctx, pending) {
 		m.finishInstall(ctx, pending, path)
 	}
 }

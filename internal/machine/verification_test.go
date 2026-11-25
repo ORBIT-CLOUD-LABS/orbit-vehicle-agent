@@ -90,6 +90,129 @@ func TestMachine_Run_InstallingRevalidatesFirmware(t *testing.T) {
 	}
 }
 
+func TestMachine_Run_ChecksVersionBeforeInstall(t *testing.T) {
+	const firmware = "firmware"
+	const campaignID int64 = 1
+	const edgeID = "edge-daejeon"
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(firmware)))
+	badSignature := errors.New("firmware signature verification failed")
+	tests := []struct {
+		name         string
+		current      string
+		target       string
+		verifyErr    error
+		wantInstall  bool
+		wantFailure  state.FailureReason
+		wantDetail   string
+		downloadOnly bool
+	}{
+		{name: "higher", current: "1.0.9", target: "1.0.10", wantInstall: true},
+		{name: "equal", current: "1.0.0", target: "1.0"},
+		{name: "lower", current: "1.0.10", target: "1.0.9", wantFailure: state.FailureDowngradeRejected, wantDetail: "lower than current version"},
+		{name: "invalid target", current: "1.0", target: "v2.0", wantFailure: state.FailureDowngradeRejected, wantDetail: "parse target version"},
+		{name: "invalid current", current: "v1.0", target: "2.0", wantFailure: state.FailureDowngradeRejected, wantDetail: "parse current version"},
+		{name: "empty target", current: "1.0", wantFailure: state.FailureDowngradeRejected, wantDetail: "parse target version", downloadOnly: true},
+		{name: "invalid signature on lower version", current: "2.0", target: "1.0", verifyErr: badSignature, wantFailure: state.FailureSignatureInvalid, wantDetail: badSignature.Error()},
+	}
+	paths := []struct {
+		name   string
+		resume bool
+	}{
+		{name: "download"},
+		{name: "resume", resume: true},
+	}
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			for _, tt := range tests {
+				if path.resume && tt.downloadOnly {
+					continue
+				}
+				t.Run(tt.name, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					dir := t.TempDir()
+					firmwarePath := filepath.Join(dir, "1.bin")
+					snap := state.Snapshot{
+						VehicleID: testIdentity.VehicleID, Status: state.StatusIdle, CurrentVersion: tt.current,
+					}
+					ota := &fakeOTA{}
+					dl := &fakeDownloader{}
+					reportIndex := 0
+					if path.resume {
+						require.NoError(t, os.WriteFile(firmwarePath, []byte(firmware), 0o600))
+						snap.Status = state.StatusInstalling
+						snap.PendingUpdate = &state.PendingUpdate{
+							CampaignID: campaignID, TargetVersion: tt.target, EdgeID: edgeID,
+							Verification: &state.FirmwareVerification{Size: int64(len(firmware)), SHA256: hash, Signature: "signature", KeyID: "v1"},
+						}
+						dl.path = firmwarePath
+					} else {
+						reportIndex = 1
+						ota.checkInResponses = []otaclient.CheckInResponse{{UpdateTarget: true, CampaignID: campaignID}, {}}
+						ota.manifestResponses = []otaclient.Manifest{{
+							CampaignID: campaignID, TargetVersion: tt.target, FileSize: int64(len(firmware)), SHA256: hash,
+							DownloadURL: "https://cdn.example/cmp-1", Edge: &otaclient.ManifestEdge{EdgeID: edgeID}, Signature: "signature", KeyID: "v1",
+						}}
+						dl.results = []downloader.Result{{Path: firmwarePath, Size: int64(len(firmware)), SHA256: hash}}
+					}
+					ota.onCheckIn = func(call int) {
+						if call == reportIndex {
+							cancel()
+						}
+					}
+					store := state.NewStore(dir, testIdentity.VehicleID)
+					require.NoError(t, store.Save(ctx, snap))
+					inst := &fakeInstaller{}
+					verifier := &fakeSignatureVerifier{err: tt.verifyErr}
+					core, logs := observer.New(zap.InfoLevel)
+					m := machine.New(ota, dl, inst, store, verifier, zap.New(core), testIdentity, "enroll-key", fastCheckIn)
+					require.ErrorIs(t, runMachine(t, m, ctx, tt.current), context.Canceled)
+
+					skips := logs.FilterMessage("skipping firmware installation because target version matches current version").All()
+					if !tt.wantInstall && tt.wantFailure == "" {
+						require.Len(t, skips, 1)
+						assert.Equal(t, zap.InfoLevel, skips[0].Level)
+						fields := skips[0].ContextMap()
+						assert.Equal(t, campaignID, fields["campaign_id"])
+						assert.Equal(t, tt.current, fields["current_version"])
+						assert.Equal(t, tt.target, fields["target_version"])
+					} else {
+						assert.Empty(t, skips)
+					}
+
+					require.Len(t, ota.checkInCalls, reportIndex+1)
+					report := ota.checkInCalls[reportIndex]
+					require.Len(t, verifier.calls, 1)
+					assert.Equal(t, tt.target, verifier.calls[0].metadata.Version)
+					final, err := store.Load(context.Background(), tt.current)
+					require.NoError(t, err)
+					assert.Equal(t, state.StatusIdle, final.Status)
+					assert.Nil(t, final.PendingUpdate)
+					if tt.wantInstall {
+						assert.Equal(t, []string{firmwarePath}, inst.calls)
+						assert.Equal(t, tt.target, report.CurrentVersion)
+						require.NotNil(t, report.LastUpdate)
+						assert.Equal(t, "SUCCEEDED", report.LastUpdate.Result)
+						return
+					}
+					assert.Empty(t, inst.calls)
+					assert.Equal(t, tt.current, report.CurrentVersion)
+					if tt.wantFailure == "" {
+						assert.Nil(t, report.LastUpdate)
+						return
+					}
+					require.NotNil(t, report.LastUpdate)
+					assert.Equal(t, campaignID, report.LastUpdate.CampaignID)
+					assert.Equal(t, "FAILED", report.LastUpdate.Result)
+					assert.Equal(t, string(tt.wantFailure), report.LastUpdate.FailureReason)
+					assert.Contains(t, report.LastUpdate.FailureDetail, tt.wantDetail)
+					assert.Equal(t, edgeID, report.LastUpdate.EdgeID)
+				})
+			}
+		})
+	}
+}
+
 func TestMachine_Run_SignatureRejectionSurvivesCheckInAndRestart(t *testing.T) {
 	const campaignID int64 = 1
 	const keyID = "rotated-test-key"
